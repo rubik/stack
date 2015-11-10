@@ -28,6 +28,7 @@ import           Data.List.Extra (nubOrd)
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import           Data.Maybe
+import           Data.Maybe.Extra (forMaybeM)
 import           Data.Monoid
 import           Data.Set (Set)
 import qualified Data.Set as S
@@ -89,7 +90,7 @@ ghci GhciOpts{..} = do
     let pkgopts =
             (if null pkgs then [] else ["-hide-all-packages"]) ++
             nubOrd (concatMap (concatMap (bioGeneratedOpts . snd) . ghciPkgOpts) pkgs) ++
-            (concatMap (concatMap (bioGhcOpts . snd) . ghciPkgOpts) pkgs)
+            concatMap (concatMap (bioGhcOpts . snd) . ghciPkgOpts) pkgs
         modulesToLoad
           | ghciNoLoadModules = []
           | otherwise =
@@ -220,8 +221,7 @@ ghciSetup mbuildFirst mainIs stringTargets = do
             }
         sourceMap
     locals <-
-        liftM catMaybes $
-        forM (M.toList (envConfigPackages econfig)) $
+        forMaybeM (M.toList (envConfigPackages econfig)) $
         \(dir,validWanted) ->
              do cabalfp <- getCabalFileName dir
                 name <- parsePackageNameFromFilePath cabalfp
@@ -316,7 +316,7 @@ makeGhciPkgInfo sourceMap installedMap locals name cabalfp target = do
     badForGhci x =
         isPrefixOf "-O" x || elem x (words "-debug -threaded -ticky -static")
     setMapMaybe f = S.fromList . mapMaybe f . S.toList
-    filterWanted m = M.filterWithKey (\k _ -> wantedComponent k) m
+    filterWanted = M.filterWithKey (\k _ -> wantedComponent k)
     wantedComponent k =
         case target of
             STLocalComps cs -> S.member k cs

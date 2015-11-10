@@ -33,11 +33,12 @@ import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy.Char8 as LBS
 import           Data.Char (isSpace,toUpper,isAscii,isDigit)
 import           Data.Conduit.List (sinkNull)
-import           Data.List (dropWhileEnd,intercalate,isPrefixOf,isInfixOf,foldl',sortBy)
+import           Data.List (dropWhileEnd,intercalate,isPrefixOf,isInfixOf,foldl')
 import           Data.List.Extra (trim)
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Maybe
+import           Data.Ord (Down(..))
 import           Data.Streaming.Process (ProcessExitedUnsuccessfully(..))
 import           Data.Text (Text)
 import qualified Data.Text as T
@@ -47,6 +48,7 @@ import           Data.Typeable (Typeable)
 import           Data.Version (showVersion)
 import           Distribution.System (Platform (Platform), Arch (X86_64), OS (Linux))
 import           Distribution.Text (display)
+import           GHC.Exts (sortWith)
 import           Network.HTTP.Client.Conduit (HasHttpManager)
 import           Path
 import           Path.Extra (toFilePathNoTrailingSep)
@@ -164,7 +166,7 @@ reexecWithOptionalContainer mprojectRoot =
             (cmdArgs args . toFilePath)
             (ensureDockerStackExe dockerContainerPlatform)
     cmdArgs args exePath =
-        let mountPath = concat ["/opt/host/bin/", takeBaseName exePath]
+        let mountPath = "/opt/host/bin/" ++ takeBaseName exePath
         in (mountPath, args, [], [Mount exePath mountPath])
 
 -- | If Docker is enabled, re-runs the OS command returned by the second argument in a
@@ -291,8 +293,8 @@ runContainerAndExit getCmdArgs
                                      (toFilePath projectRoot)
 
            mapM_ createTree
-                 (concat [[sandboxHomeDir, sandboxSandboxDir, stackRoot] ++
-                          sandboxSubdirs]))
+                 ([sandboxHomeDir, sandboxSandboxDir, stackRoot] ++
+                          sandboxSubdirs))
      containerID <- (trim . decodeUtf8) <$> readDockerProcess
        envOverride
        (concat
@@ -326,8 +328,8 @@ runContainerAndExit getCmdArgs
      before
 #ifndef WINDOWS
      runInBase <- liftBaseWith $ \run -> return (void . run)
-     oldHandlers <- forM (concat [[(sigINT,sigTERM) | not keepStdinOpen]
-                                 ,[(sigTERM,sigTERM)]]) $ \(sigIn,sigOut) -> do
+     oldHandlers <- forM ([(sigINT,sigTERM) | not keepStdinOpen] ++
+                                 [(sigTERM,sigTERM)]) $ \(sigIn,sigOut) -> do
        let sigHandler = runInBase (readProcessNull Nothing envOverride "docker"
                                      ["kill","--signal=" ++ show sigOut,containerID])
        oldHandler <- liftIO $ installHandler sigIn (Catch sigHandler) Nothing
@@ -510,11 +512,12 @@ cleanup opts =
           case accessor opts of
             Just days -> buildStrLn ("#   - " ++ description ++ " at least " ++ showDays days ++ ".")
             Nothing -> return ()
-        sortCreated l =
-          reverse (sortBy (\(_,_,a) (_,_,b) -> compare a b)
-                          (catMaybes (map (\(h,r) -> fmap (\ii -> (h,r,iiCreated ii))
-                                                          (Map.lookup h inspectMap))
-                                          l)))
+        sortCreated =
+            sortWith (\(_,_,x) -> Down x) .
+            (mapMaybe (\(h,r) ->
+                case Map.lookup h inspectMap of
+                    Nothing -> Nothing
+                    Just ii -> Just (h,r,iiCreated ii)))
         buildSection sectionHead items itemBuilder =
           do let (anyWrote,b) = runWriter (forM items itemBuilder)
              when (or anyWrote) $
@@ -652,7 +655,7 @@ checkDockerVersion envOverride docker =
      unless dockerExists (throwM DockerNotInstalledException)
      dockerVersionOut <- readDockerProcess envOverride ["--version"]
      case words (decodeUtf8 dockerVersionOut) of
-       (_:_:v:_) -> do
+       (_:_:v:_) ->
          case parseVersionFromString (dropWhileEnd (not . isDigit) v) of
            Just v'
              | v' < minimumDockerVersion ->
@@ -660,7 +663,7 @@ checkDockerVersion envOverride docker =
              | v' `elem` prohibitedDockerVersions ->
                throwM (DockerVersionProhibitedException prohibitedDockerVersions v')
              | not (v' `withinRange` dockerRequireDockerVersion docker) ->
-               (throwM (BadDockerVersionException (dockerRequireDockerVersion docker) v'))
+               throwM (BadDockerVersionException (dockerRequireDockerVersion docker) v')
              | otherwise ->
                return ()
            _ -> throwM InvalidVersionOutputException
@@ -701,8 +704,7 @@ removeDirectoryContents path excludeDirs excludeFiles =
 readDockerProcess
     :: (MonadIO m, MonadLogger m, MonadBaseControl IO m, MonadCatch m)
     => EnvOverride -> [String] -> m BS.ByteString
-readDockerProcess envOverride args =
-  readProcessStdout Nothing envOverride "docker" args
+readDockerProcess envOverride = readProcessStdout Nothing envOverride "docker"
 
 -- | Subdirectories of the home directory to sandbox between GHC/Stackage versions.
 sandboxedHomeSubdirectories :: [Path Rel Dir]
@@ -733,7 +735,7 @@ sandboxIDEnvVar = "DOCKER_SANDBOX_ID"
 
 -- | Environment variable used to indicate stack is running in container.
 inContainerEnvVar :: String
-inContainerEnvVar = concat [map toUpper stackProgName,"_IN_CONTAINER"]
+inContainerEnvVar = fmap toUpper stackProgName ++ "_IN_CONTAINER"
 
 -- | Command-line argument for "docker"
 dockerCmdName :: String
@@ -779,10 +781,10 @@ data Inspect = Inspect
 instance FromJSON Inspect where
   parseJSON v =
     do o <- parseJSON v
-       (Inspect <$> o .: T.pack "Config"
-                <*> o .: T.pack "Created"
-                <*> o .: T.pack "Id"
-                <*> o .:? T.pack "VirtualSize")
+       Inspect <$> o .: T.pack "Config"
+               <*> o .: T.pack "Created"
+               <*> o .: T.pack "Id"
+               <*> o .:? T.pack "VirtualSize"
 
 -- | Parsed @Config@ section of @docker inspect@ output.
 data ImageConfig = ImageConfig
@@ -841,7 +843,7 @@ instance Exception StackDockerException
 -- | Show instance for StackDockerException.
 instance Show StackDockerException where
   show DockerMustBeEnabledException =
-    concat ["Docker must be enabled in your configuration file to use this command."]
+    "Docker must be enabled in your configuration file to use this command."
   show OnlyOnHostException =
     "This command must be run on host OS (not in a Docker container)."
   show (InspectFailedException image) =

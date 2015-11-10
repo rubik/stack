@@ -44,6 +44,7 @@ import           Data.List                      hiding (any)
 import           Data.Map.Strict                (Map)
 import qualified Data.Map.Strict                as Map
 import           Data.Maybe
+import           Data.Maybe.Extra               (forMaybeM)
 import           Data.Monoid                    ((<>))
 import           Data.Set                       (Set)
 import qualified Data.Set                       as Set
@@ -93,6 +94,7 @@ import           System.Process.Internals       (createProcess_)
 
 type M env m = (MonadIO m,MonadReader env m,HasHttpManager env,HasBuildConfig env,MonadLogger m,MonadBaseControl IO m,MonadCatch m,MonadMask m,HasLogLevel env,HasEnvConfig env,HasTerminal env)
 
+-- | Fetch the packages necessary for a build, for example in combination with a dry run.
 preFetch :: M env m => Plan -> m ()
 preFetch plan
     | Set.null idents = $logDebug "Nothing to fetch"
@@ -112,6 +114,7 @@ preFetch plan
                 name
                 (packageVersion package)
 
+-- | Print a description of build plan for human consumption.
 printPlan :: M env m
           => Plan
           -> m ()
@@ -276,6 +279,7 @@ getSetupExe setupHs tmpdir = do
             renameFile tmpExePath exePath
             return $ Just exePath
 
+-- | Execute a callback that takes an 'ExecuteEnv'.
 withExecuteEnv :: M env m
                => EnvOverride
                -> BuildOpts
@@ -365,7 +369,7 @@ executePlan menv bopts baseConfigOpts locals globalPackages snapshotPackages loc
 
         currExe <- liftIO getExecutablePath -- needed for windows, see below
 
-        installed <- forM (Map.toList $ planInstallExes plan) $ \(name, loc) -> do
+        installed <- forMaybeM (Map.toList $ planInstallExes plan) $ \(name, loc) -> do
             let bindir =
                     case loc of
                         Snap -> snapBin
@@ -395,7 +399,7 @@ executePlan menv bopts baseConfigOpts locals globalPackages snapshotPackages loc
                         _ -> D.copyFile (toFilePath file) destFile
                     return $ Just (destDir', [T.append name (T.pack ext)])
 
-        let destToInstalled = Map.fromListWith (++) (catMaybes installed)
+        let destToInstalled = Map.fromListWith (++) installed
         unless (Map.null destToInstalled) $ $logInfo ""
         forM_ (Map.toList destToInstalled) $ \(dest, executables) -> do
             $logInfo $ T.concat
@@ -898,7 +902,7 @@ singleBuild :: M env m
             -> ExecuteEnv
             -> Task
             -> InstalledMap
-            -> Bool
+            -> Bool             -- ^ Is this a final build?
             -> m ()
 singleBuild runInBase ac@ActionContext {..} ee@ExecuteEnv {..} task@Task {..} installedMap isFinalBuild = do
     (allDepsMap, cache) <- getConfigCache ee task installedMap enableTests enableBenchmarks
