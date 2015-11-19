@@ -51,6 +51,7 @@ import           Path.IO
 import qualified Paths_stack as Meta
 import           Prelude hiding (pi, mapM)
 import           Stack.Build
+import           Stack.Clean (CleanOpts, clean)
 import           Stack.Config
 import           Stack.ConfigCmd as ConfigCmd
 import           Stack.Constants
@@ -283,7 +284,7 @@ main = withInterpreterArgs stackProgName $ \args isInterpreter -> do
                         "Clean the local packages"
                         cmdFooter
                         cleanCmd
-                        (pure ())
+                        cleanOptsParser
              addCommand' "list-dependencies"
                         "List the dependencies"
                         cmdFooter
@@ -427,6 +428,7 @@ pathCmd keys go =
             menv <- getMinimalEnvOverride
             snap <- packageDatabaseDeps
             local <- packageDatabaseLocal
+            extra <- packageDatabaseExtra
             global <- getGlobalDB menv =<< getWhichCompiler
             snaproot <- installationRootDeps
             localroot <- installationRootLocal
@@ -456,7 +458,8 @@ pathCmd keys go =
                                     snaproot
                                     localroot
                                     distDir
-                                    hpcDir))))
+                                    hpcDir
+                                    extra))))
 
 -- | Passed to all the path printers as a source of info.
 data PathInfo = PathInfo
@@ -469,6 +472,7 @@ data PathInfo = PathInfo
     , piLocalRoot   :: Path Abs Dir
     , piDistDir     :: Path Rel Dir
     , piHpcDir      :: Path Abs Dir
+    , piExtraDbs    :: [Path Abs Dir]
     }
 
 -- | The paths of interest to a user. The first tuple string is used
@@ -517,7 +521,7 @@ paths =
       , T.pack . toFilePathNoTrailingSep . piGlobalDb )
     , ( "GHC_PACKAGE_PATH environment variable"
       , "ghc-package-path"
-      , \pi -> mkGhcPackagePath True (piLocalDb pi) (piSnapDb pi) (piGlobalDb pi) )
+      , \pi -> mkGhcPackagePath True (piLocalDb pi) (piSnapDb pi) (piExtraDbs pi) (piGlobalDb pi))
     , ( "Snapshot installation root"
       , "snapshot-install-root"
       , T.pack . toFilePathNoTrailingSep . piSnapRoot )
@@ -752,8 +756,8 @@ withBuildConfigExt go@GlobalOpts{..} mbefore inner mafter = do
                                              do lk' <- readIORef curLk
                                                 munlockFile lk')
 
-cleanCmd :: () -> GlobalOpts -> IO ()
-cleanCmd () go = withBuildConfigAndLock go (const clean)
+cleanCmd :: CleanOpts -> GlobalOpts -> IO ()
+cleanCmd opts go = withBuildConfigAndLock go (const (clean opts))
 
 -- | Helper for build and install commands
 buildCmd :: BuildOpts -> GlobalOpts -> IO ()
@@ -852,9 +856,8 @@ execCmd ExecOpts {..} go@GlobalOpts{..} =
             (manager,lc) <- liftIO $ loadConfigWithOpts go
             withUserFileLock go (configStackRoot $ lcConfig lc) $ \lk ->
              runStackTGlobal manager (lcConfig lc) go $
-                Docker.execWithOptionalContainer
+                Docker.reexecWithOptionalContainer
                     (lcProjectRoot lc)
-                    (\_ _ -> return (cmd, args, [], []))
                     -- Unlock before transferring control away, whether using docker or not:
                     (Just $ munlockFile lk)
                     (runStackTGlobal manager (lcConfig lc) go $
@@ -996,10 +999,15 @@ loadConfigWithOpts go@GlobalOpts{..} = do
             Just fp -> do
                 path <- canonicalizePath fp >>= parseAbsFile
                 return $ Just path
-    lc <- runStackLoggingTGlobal
-              manager
-              go
-              (loadConfig globalConfigMonoid mstackYaml)
+    lc <- runStackLoggingTGlobal manager go $ do
+        lc <- loadConfig globalConfigMonoid mstackYaml
+        -- If we have been relaunched in a Docker container, perform in-container initialization
+        -- (switch UID, etc.).  We do this after first loading the configuration since it must
+        -- happen ASAP but needs a configuration.
+        case globalDockerEntrypoint of
+            Just de -> Docker.entrypoint (lcConfig lc) de
+            Nothing -> return ()
+        return lc
     return (manager,lc)
 
 -- | Project initialization

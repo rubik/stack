@@ -121,6 +121,7 @@ data StackBuildException
   | SolverMissingCabalInstall
   | SolverMissingGHC
   | SolverNoCabalFiles
+  | SomeTargetsNotBuildable [(PackageName, NamedComponent)]
   deriving Typeable
 
 data FlagSource = FSCommandLine | FSStackYaml
@@ -331,6 +332,10 @@ instance Show StackBuildException where
         [ "No cabal files provided.  Maybe this is due to not having a stack.yaml file?"
         , "Try running 'stack init' to create a stack.yaml"
         ]
+    show (SomeTargetsNotBuildable xs) =
+        "The following components have 'buildable: False' set in the cabal configuration, and so cannot be targets:\n    " ++
+        T.unpack (renderPkgComponents xs) ++
+        "\nTo resolve this, either provide flags such that these components are buildable, or only specify buildable targets."
 
 instance Exception StackBuildException
 
@@ -640,7 +645,7 @@ configureOptsDirs :: BaseConfigOpts
                   -> [String]
 configureOptsDirs bco loc package = concat
     [ ["--user", "--package-db=clear", "--package-db=global"]
-    , map (("--package-db=" ++) . toFilePath) $ case loc of
+    , map (("--package-db=" ++) . toFilePathNoTrailingSep) $ case loc of
         Snap -> bcoExtraDBs bco ++ [bcoSnapDB bco]
         Local -> bcoExtraDBs bco ++ [bcoSnapDB bco] ++ [bcoLocalDB bco]
     , [ "--libdir=" ++ toFilePathNoTrailingSep (installRoot </> $(mkRelDir "lib"))
@@ -719,10 +724,9 @@ configureOptsNoDir econfig bco deps wanted isLocal package = concat
       where
         PackageIdentifier name version = ident
 
-    ghcOptionsMap = configGhcOptions $ getConfig econfig
     allGhcOptions = concat
-        [ Map.findWithDefault [] Nothing ghcOptionsMap
-        , Map.findWithDefault [] (Just $ packageName package) ghcOptionsMap
+        [ Map.findWithDefault [] Nothing (configGhcOptions config)
+        , Map.findWithDefault [] (Just $ packageName package) (configGhcOptions config)
         , if includeExtraOptions
             then boptsGhcOptions bopts
             else []

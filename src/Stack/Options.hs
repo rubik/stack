@@ -1,9 +1,10 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings,RecordWildCards #-}
 
 module Stack.Options
     (Command(..)
     ,benchOptsParser
     ,buildOptsParser
+    ,cleanOptsParser
     ,configCmdSetParser
     ,configOptsParser
     ,dockerOptsParser
@@ -40,6 +41,7 @@ import           Options.Applicative
 import           Options.Applicative.Args
 import           Options.Applicative.Builder.Extra
 import           Options.Applicative.Types (fromM, oneM, readerAsk)
+import           Stack.Clean (CleanOpts(..))
 import           Stack.Config (packagesParser)
 import           Stack.ConfigCmd
 import           Stack.Constants (stackProgName)
@@ -223,6 +225,16 @@ readFlag = do
                     Just x -> return x
             return $ Map.singleton pn' $ Map.singleton flagN b
         _ -> readerError "Must have a colon"
+
+-- | Command-line parser for the clean command.
+cleanOptsParser :: Parser CleanOpts
+cleanOptsParser = CleanOpts <$> packages
+  where
+    packages =
+        many
+            (packageNameArgument
+                 (metavar "PACKAGE" <>
+                  help "If none specified, clean all local packages"))
 
 -- | Command-line arguments parser for configuration.
 configOptsParser :: Bool -> Parser ConfigMonoid
@@ -533,10 +545,8 @@ execOptsExtraParser = eoPlainParser <|>
 globalOptsParser :: Bool -> Parser GlobalOptsMonoid
 globalOptsParser hide0 =
     GlobalOptsMonoid <$>
-    optional (strOption (long Docker.reExecArgName <>
-                         hidden <>
-                         internal <>
-                         hide)) <*>
+    optional (strOption (long Docker.reExecArgName <> hidden <> internal)) <*>
+    optional (option auto (long dockerEntrypointArgName <> hidden <> internal)) <*>
     logLevelOptsParser hide0 <*>
     configOptsParser hide0 <*>
     optional (abstractResolverOptsParser hide0) <*>
@@ -554,14 +564,15 @@ globalOptsParser hide0 =
 
 -- | Create GlobalOpts from GlobalOptsMonoid.
 globalOptsFromMonoid :: Bool -> GlobalOptsMonoid -> GlobalOpts
-globalOptsFromMonoid defaultTerminal gm = GlobalOpts
-    { globalReExecVersion = globalMonoidReExecVersion gm
-    , globalLogLevel = fromMaybe defaultLogLevel (globalMonoidLogLevel gm)
-    , globalConfigMonoid = globalMonoidConfigMonoid gm
-    , globalResolver = globalMonoidResolver gm
-    , globalCompiler = globalMonoidCompiler gm
-    , globalTerminal = fromMaybe defaultTerminal (globalMonoidTerminal gm)
-    , globalStackYaml = globalMonoidStackYaml gm }
+globalOptsFromMonoid defaultTerminal GlobalOptsMonoid{..} = GlobalOpts
+    { globalReExecVersion = globalMonoidReExecVersion
+    , globalDockerEntrypoint = globalMonoidDockerEntrypoint
+    , globalLogLevel = fromMaybe defaultLogLevel (globalMonoidLogLevel)
+    , globalConfigMonoid = globalMonoidConfigMonoid
+    , globalResolver = globalMonoidResolver
+    , globalCompiler = globalMonoidCompiler
+    , globalTerminal = fromMaybe defaultTerminal (globalMonoidTerminal)
+    , globalStackYaml = globalMonoidStackYaml }
 
 initOptsParser :: Parser InitOpts
 initOptsParser =

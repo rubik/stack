@@ -34,9 +34,8 @@ import qualified Codec.Archive.Tar as Tar
 import qualified Codec.Compression.GZip as GZip
 import           Control.Applicative
 import           Control.Arrow ((***))
-import           Control.Exception (IOException)
 import           Control.Monad
-import           Control.Monad.Catch (Handler(..), MonadCatch, MonadThrow, catches, throwM)
+import           Control.Monad.Catch (MonadThrow, MonadCatch, catchAll, throwM)
 import           Control.Monad.IO.Class
 import           Control.Monad.Logger hiding (Loc)
 import           Control.Monad.Reader (MonadReader, ask, runReaderT)
@@ -62,12 +61,13 @@ import           Network.HTTP.Client.Conduit (HasHttpManager, getHttpManager, Ma
 import           Network.HTTP.Download (download)
 import           Options.Applicative (Parser, strOption, long, help)
 import           Path
+import           Path.Extra (toFilePathNoTrailingSep)
 import           Path.IO
 import qualified Paths_stack as Meta
 import           Safe (headMay)
 import           Stack.BuildPlan
-import           Stack.Constants
 import           Stack.Config.Docker
+import           Stack.Constants
 import qualified Stack.Image as Image
 import           Stack.Init
 import           Stack.PackageIndex
@@ -95,7 +95,7 @@ configFromConfigMonoid
     :: (MonadLogger m, MonadIO m, MonadCatch m, MonadReader env m, HasHttpManager env)
     => Path Abs Dir -- ^ stack root, e.g. ~/.stack
     -> Path Abs File -- ^ user config file path, e.g. ~/.stack/config.yaml
-    -> Maybe Project
+    -> Maybe (Project, Path Abs File)
     -> ConfigMonoid
     -> m Config
 configFromConfigMonoid configStackRoot configUserConfigPath mproject configMonoid@ConfigMonoid{..} = do
@@ -143,7 +143,7 @@ configFromConfigMonoid configStackRoot configUserConfigPath mproject configMonoi
 
          configCompilerCheck = fromMaybe MatchMinor configMonoidCompilerCheck
 
-     configDocker <- dockerOptsFromMonoid mproject configStackRoot configMonoidDockerOpts
+     configDocker <- dockerOptsFromMonoid (fmap fst mproject) configStackRoot configMonoidDockerOpts
 
      rawEnv <- liftIO getEnvironment
      origEnv <- mkEnvOverride configPlatform
@@ -169,11 +169,17 @@ configFromConfigMonoid configStackRoot configUserConfigPath mproject configMonoi
                  localDir <- liftIO (getAppUserDataDirectory "local") >>= parseAbsDir
                  return $ localDir </> $(mkRelDir "bin")
              Just userPath ->
-                 liftIO (canonicalizePath userPath >>= parseAbsDir)
-                 `catches`
-                 [Handler (\(_ :: IOException) -> throwM $ NoSuchDirectory userPath)
-                 ,Handler (\(_ :: PathParseException) -> throwM $ NoSuchDirectory userPath)
-                 ]
+                 (case mproject of
+                     -- Not in a project
+                     Nothing -> parseRelAsAbsDir userPath
+                     -- Resolves to the project dir and appends the user path if it is relative
+                     Just (_, configYaml) -> resolveDir (parent configYaml) userPath)
+                 -- TODO: Either catch specific exceptions or add a
+                 -- parseRelAsAbsDirMaybe utility and use it along with
+                 -- resolveDirMaybe.
+                 `catchAll`
+                 const (throwM (NoSuchDirectory userPath))
+
      configJobs <-
         case configMonoidJobs of
             Nothing -> liftIO getNumProcessors
@@ -275,7 +281,8 @@ loadConfig configArgs mstackYaml = do
                               (configMonoidDockerOpts c) {dockerMonoidDefaultEnable = False}})
                 extraConfigs0
     mproject <- loadProjectConfig mstackYaml
-    config <- configFromConfigMonoid stackRoot userConfigPath (fmap (\(proj, _, _) -> proj) mproject) $ mconcat $
+    let mproject' = (\(project, stackYaml, _) -> (project, stackYaml)) <$> mproject
+    config <- configFromConfigMonoid stackRoot userConfigPath mproject' $ mconcat $
         case mproject of
             Nothing -> configArgs : extraConfigs
             Just (_, _, projectConfig) -> configArgs : projectConfig : extraConfigs
@@ -472,7 +479,7 @@ resolvePackageLocation menv projRoot (PLGit url commit) = do
         readInNull (parent dirTmp) "git" menv
             [ "clone"
             , T.unpack url
-            , toFilePath dirTmp
+            , toFilePathNoTrailingSep dirTmp
             ]
             Nothing
         readInNull dirTmp "git" menv
