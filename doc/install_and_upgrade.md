@@ -153,6 +153,10 @@ Yosemite and Mavericks as well, and may also work on older versions (YMMV).
 
 1. Add the appropriate source repository:
 
+    * Fedora 23 (x86_64)
+
+            curl -sSL https://s3.amazonaws.com/download.fpcomplete.com/fedora/23/fpco.repo | sudo tee /etc/yum.repos.d/fpco.repo
+
     * Fedora 22 (x86_64)
 
             curl -sSL https://s3.amazonaws.com/download.fpcomplete.com/fedora/22/fpco.repo | sudo tee /etc/yum.repos.d/fpco.repo
@@ -163,7 +167,7 @@ Yosemite and Mavericks as well, and may also work on older versions (YMMV).
 
 2. Install:
 
-    * Fedora 22+
+    * Fedora 22 and above
 
             sudo dnf -y install stack
 
@@ -237,6 +241,16 @@ You can install stack by copying it anywhere on your PATH environment variable. 
 If you don't have that directory in your PATH, you may need to update your PATH (such as by editing .bashrc).
 
 If you're curious about the choice of these paths, see [issue #153](https://github.com/commercialhaskell/stack/issues/153)
+
+## Shell auto-completion
+
+To get tab-completion of commands on bash, just run the following (or add it to
+`.bashrc`):
+
+    eval "$(stack --bash-completion-script stack)"
+
+For more information and other shells, see [the shell auto-completion wiki
+page](https://github.com/commercialhaskell/stack/wiki/Shell-autocompletion)
 
 ## Upgrade
 

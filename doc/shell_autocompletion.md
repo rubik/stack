@@ -1,4 +1,4 @@
-## Shell Autocompletion:
+## Shell auto-completion:
 
 Note: if you installed a package for you Linux distribution, the bash completion
 file was automatically installed (you may need the `bash-completion` package to
@@ -10,7 +10,7 @@ The following adds support for shell tab completion for standard Stack arguments
 
 you need to run following command
 ```
-eval "$(stack --bash-completion-script "$(which stack)")"
+eval "$(stack --bash-completion-script stack)"
 ```
 You can also add it to your `.bashrc` file if you want.
 
@@ -27,7 +27,7 @@ You must so:
 ```shell
 autoload -U +X compinit && compinit
 autoload -U +X bashcompinit && bashcompinit
-eval "$(stack --bash-completion-script "$(which stack)")"
+eval "$(stack --bash-completion-script stack)"
 ```
 
 :information_source: If you already have quite a large zshrc, or if you use oh-my-zsh, **compinit** will probably already be loaded. If you have a blank zsh config, all of the 3 lines above are necessary.
