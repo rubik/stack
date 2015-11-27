@@ -106,8 +106,9 @@ ghci GhciOpts{..} = do
             ("The following GHC options are incompatible with GHCi and have not been passed to it: " <>
              T.unwords (map T.pack (nubOrd omittedOpts)))
     let modulesToLoad = nubOrd $
-            maybe [] (return . toFilePath) mainFile <>
             concatMap (map display . S.toList . ghciPkgModules) pkgs
+        thingsToLoad =
+            maybe [] (return . toFilePath) mainFile <> modulesToLoad
         odir =
             [ "-odir=" <> toFilePathNoTrailingSep (objectInterfaceDir bconfig)
             , "-hidir=" <> toFilePathNoTrailingSep (objectInterfaceDir bconfig)]
@@ -132,7 +133,7 @@ ghci GhciOpts{..} = do
                 (\tmpDir ->
                       do let scriptPath = tmpDir </> $(mkRelFile "ghci-script")
                              fp = toFilePath scriptPath
-                             loadModules = ":load " <> unwords modulesToLoad
+                             loadModules = ":load " <> unwords (map show thingsToLoad)
                              bringIntoScope = ":module + " <> unwords modulesToLoad
                          liftIO (writeFile fp (unlines [loadModules,bringIntoScope]))
                          finally (execGhci ["-ghci-script=" <> fp])

@@ -1,24 +1,37 @@
+# Maintainer guide
+
 ## Pre-release checks
 
 The following should be tested minimally before a release is considered good
 to go:
 
+* Ensure `release` and `stable` branches merged to `master`
 * Integration tests pass on a representative sample of platforms: `stack test
   --flag stack:integration-tests`. The actual release script will perform a more
   thorough test for every platform/variant prior to uploading, so this is just a
   pre-check
+* Stack builds with `stack-7.8.yaml`
 * stack can build the wai repo
 * Running `stack build` a second time on either stack or wai is a no-op
 * Build something that depends on `happy` (suggestion: `hlint`), since `happy`
   has special logic for moving around the `dist` directory
-* Make sure to bump the version number in the .cabal file and the ChangeLog
-  appropriately (check for any entries that snuck into the previous version's
-  changes)
-* In release candidate, remove the Changelog's "unreleased changes" section
+* In release candidate branch:
+    * Bump the version number (to even second-to-last component) in the .cabal
+      file
+    * Rename Changelog's "unreleased changes" section to the version (check for
+      any entries that snuck into the previous version's changes)
+    * Next release (post-0.1.9.0): Add release note about new documentation/home page
+* In master branch:
+    * Bump version to next odd second-to-last component
+    * Add new "unreleased changes" secion in changelog
+    * Bump to use latest LTS version
 * Review documentation for any changes that need to be made
-    * Search for old Stack version and replace with new version
-* Ensure all `doc/*.md` files are listed in `stack.cabal`'s 'extra-source-files`
-* Ensure all documentation pages listed in `mkdocs.yaml`
+    * Search for old Stack version, unstable stack version, and the next
+      "obvious" version in sequence (if doing a non-obvious jump) and replace
+      with new version
+    * Look for any links to "latest" documentation, replace with version tag
+    * Ensure to inter-doc links use `.html` extension (not `.md`)
+    * Ensure all documentation pages listed in `doc/index.rst`
 * Check that any new Linux distribution versions added to
   `etc/scripts/release.hs` and `etc/scripts/vagrant-releases.sh`
 * Check that no new entries need to be added to
@@ -26,6 +39,12 @@ to go:
   [install_and_upgrade.md](https://github.com/commercialhaskell/stack/blob/master/doc/install_and_upgrade.md),
   and
   [README.md](https://github.com/commercialhaskell/stack/blob/master/README.md)
+* Next release (post-0.1.9.0)
+    - Fix ubuntu/debian repos:
+      https://github.com/commercialhaskell/stack/issues/1378
+    - Test distro package autocompletion to ensure non-absolute path to `stack`
+      works
+      (https://github.com/commercialhaskell/stack/issues/1343#issuecomment-158647308)
 
 ## Release process
 
@@ -58,6 +77,8 @@ for requirements to perform the release, and more details about the tool.
 * Reset the `release` branch to the released commit, e.g.: `git checkout release
   && git merge --ff-only vX.Y.Z && git push origin release`
 
+* Update the `stable` branch
+
 * Publish Github release
 
 * Edit
@@ -66,29 +87,40 @@ for requirements to perform the release, and more details about the tool.
 
 * Upload package to Hackage: `stack upload . --pvp-bounds=both`
 
+* Activate version for new release tag on
+  [readthedocs.org](https://readthedocs.org/projects/stack/versions/), and
+  ensure that stable documentation has updated
+
 * On a machine with Vagrant installed:
     * Run `etc/scripts/vagrant-distros.sh`
 
 * Update in Arch Linux's
   [haskell-stack.git](ssh+git://aur@aur.archlinux.org/haskell-stack.git):
   `PKGBUILD` and `.SRCINFO`
-    * Be sure to reset `pkgrel` in both files, and update the SHA1 sum
+      * Be sure to reset `pkgrel` in both files, and update the SHA1 sum
+      * Next release (post-0.1.9.0): update home page to haskellstack.org
 
 * Submit a PR for the
   [haskell-stack Homebrew formula](https://github.com/Homebrew/homebrew/blob/master/Library/Formula/haskell-stack.rb)
       * Be sure to update the SHA sum
       * The commit message should just be `haskell-stack <VERSION>`
+      * Next release (post-0.1.9.0): update home page to haskellstack.org
 
-* [Build new MinGHC distribution](#build_minghc)
+* [Build new MinGHC distribution](#update-minghc)
 
-* [Upload haddocks to Hackage](#upload_haddocks), if hackage couldn't build on its own
+* [Upload haddocks to Hackage](#upload-haddocks-to-hackage), if hackage couldn't
+  build on its own
 
 * Announce to haskell-cafe@haskell.org, haskell-stack@googlegroups.com,
   commercialhaskell@googlegroups.com mailing lists
 
-# Extra steps
+* Next release (post-0.1.9.0): update home page to haskellstack.org:
+    * Do a google search for old URL
+    * Update stackage.org home page
 
-## Upload haddocks to Hackage <a name="upload_haddocks"></a>
+## Extra steps
+
+### Upload haddocks to Hackage
 
 * Set `STACKVER` environment variable to the Stack version (e.g. `0.1.6.0`)
 * Run:
@@ -109,7 +141,7 @@ curl -X PUT \
      "https://hackage.haskell.org/package/stack-$STACKVER/docs"
 ```
 
-## Update MinGHC <a name="build_minghc"></a>
+### Update MinGHC
 
 Full details of prerequisites and steps for building MinGHC are in its
 [README](https://github.com/fpco/minghc#building-installers). What follows is an

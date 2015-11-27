@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings     #-}
+{-# LANGUAGE PackageImports        #-}
 {-# LANGUAGE TemplateHaskell       #-}
 {-# LANGUAGE TupleSections         #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
@@ -27,7 +28,7 @@ import           Control.Monad.IO.Class
 import           Control.Monad.Logger
 import           Control.Monad.Reader (MonadReader, asks)
 import           Control.Monad.Trans.Resource
-import           Crypto.Hash (Digest, SHA256)
+import "cryptohash" Crypto.Hash (Digest, SHA256)
 import           Crypto.Hash.Conduit (sinkHash)
 import qualified Data.ByteString as S
 import           Data.Byteable (toBytes)
@@ -286,7 +287,7 @@ loadLocalPackage
     -> (PackageName, (LocalPackageView, GenericPackageDescription))
     -> m LocalPackage
 loadLocalPackage bopts targets (name, (lpv, gpkg)) = do
-    config  <- getPackageConfig name
+    config  <- getPackageConfig bopts name
 
     let pkg = resolvePackage config gpkg
 
@@ -566,15 +567,16 @@ checkComponentsBuildable lps =
 
 -- | Get 'PackageConfig' for package given its name.
 getPackageConfig :: (MonadIO m, MonadThrow m, MonadCatch m, MonadLogger m, MonadReader env m, HasEnvConfig env)
-  => PackageName
+  => BuildOpts
+  -> PackageName
   -> m PackageConfig
-getPackageConfig name = do
+getPackageConfig bopts name = do
   econfig <- asks getEnvConfig
   bconfig <- asks getBuildConfig
   return PackageConfig
     { packageConfigEnableTests = False
     , packageConfigEnableBenchmarks = False
-    , packageConfigFlags = localFlags Map.empty bconfig name
+    , packageConfigFlags = localFlags (boptsFlags bopts) bconfig name
     , packageConfigCompilerVersion = envConfigCompilerVersion econfig
     , packageConfigPlatform = configPlatform $ getConfig bconfig
     }

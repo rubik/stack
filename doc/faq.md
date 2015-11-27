@@ -1,10 +1,12 @@
+# FAQ
+
 So that this doesn't become repetitive: for the reasons behind the answers
-below, see the [Architecture](architecture.md) page. The goal of the answers here is to be as
+below, see the [Architecture](architecture.html) page. The goal of the answers here is to be as
 helpful and concise as possible.
 
 #### Where is stack installed and will it interfere with `ghc` (etc) I already have installed?
 
-Stack itself is installed in normal system locations based on the mechanism you used (see the [Install and upgrade](install_and_upgrade.md) page). Stack installs the Stackage libraries in `~/.stack` and any project libraries or extra dependencies in a `.stack-work` directory within each project's directory. None of this should affect any existing Haskell tools at all.
+Stack itself is installed in normal system locations based on the mechanism you used (see the [Install and upgrade](install_and_upgrade.html) page). Stack installs the Stackage libraries in `~/.stack` and any project libraries or extra dependencies in a `.stack-work` directory within each project's directory. None of this should affect any existing Haskell tools at all.
 
 #### What is the relationship between stack and cabal?
 
@@ -153,7 +155,7 @@ Like all other targets, `stack test` runs test suites in parallel by default. Th
 
 #### Can I get bash autocompletion?
 
-Yes, see the [shell-autocompletion documentation](shell_autocompletion.md)
+Yes, see the [shell-autocompletion documentation](shell_autocompletion.html)
 
 #### How do I update my package index?
 
@@ -174,7 +176,7 @@ of those three. Updating the index will have no impact on stack's behavior.
 
 #### I have a custom package index I'd like to use, how do I do so?
 
-You can configure this in your stack.yaml. See [YAML configuration](yaml_configuration.md).
+You can configure this in your stack.yaml. See [YAML configuration](yaml_configuration.html).
 
 #### How can I make sure my project builds against multiple ghc versions?
 
@@ -202,11 +204,11 @@ $ STACK_YAML=stack-7.10.yaml stack build  # builds using the given yaml file
 #### I heard you can use this with Docker?
 
 Yes, stack supports using Docker with images that contain preinstalled Stackage
-packages and the tools. See [Docker integration](docker_integration.md) for details.
+packages and the tools. See [Docker integration](docker_integration.html) for details.
 
 #### How do I use this with Travis CI?
 
-See the [Travis section in the GUIDE](GUIDE.md#travis-with-caching)
+See the [Travis section in the GUIDE](GUIDE.html#travis-with-caching)
 
 #### What is licensing restrictions on Windows?
 
@@ -279,3 +281,37 @@ collect2: error: ld returned 1 exit status
 #### Where does the output from `--ghc-options=-ddump-splices` (and other `-ddump*` options) go?
 
 These are written to `*.dump-*` files inside the package's `.stack-work` directory.
+
+#### Why is DYLD_LIBRARY_PATH ignored?
+
+<a name="disable-rootless"></a><a name="dyld-library-path-ignored"></a>If you
+are on Mac OS X 10.11 ("El Capitan") or later, System Integrity Protection
+(a.k.a. "rootless")
+[prevents the `DYLD_LIBRARY_PATH` environment variable from being passed to sub-processes](https://github.com/commercialhaskell/stack/issues/1161).
+The only workaround we are aware of is
+[disabling System Integrity Protection](http://osxdaily.com/2015/10/05/disable-rootless-system-integrity-protection-mac-os-x/):
+
+ 1. Reboot into recovery mode (hold down Cmd-R at boot)
+ 2. Open a terminal (select __Terminal__ from the __Utilities__ menu)
+ 3. Run `csrutil disable; reboot`
+
+Note that this reduces the security of your system.
+
+#### Why do I get a `/usr/bin/ar: permission denied` error?
+
+<a name="usr-bin-ar-permission-denied"></a>On OS X 10.11 ("El Capitan") and
+later, this is
+[caused by System Integrity Protection (a.k.a. "rootless")](https://github.com/commercialhaskell/stack/issues/563).
+GHC 7.10.2 includes a fix, so this only effects users of GHC 7.8.4. If you
+cannot upgrade to GHC 7.10.2, you can work around it by
+[disabling System Integrity Protection](#disable-rootless)
+
+#### Why is the `--` argument separator ignored in Windows PowerShell
+
+Some versions of Windows PowerShell
+[don't pass the `--` to programs](https://github.com/commercialhaskell/stack/issues/813).
+The workaround is to quote the `"--"`, e.g.:
+
+    stack exec "--" cabal --version
+
+This is known to be a problem on Windows 7, but seems to be fixed on Windows 10.
