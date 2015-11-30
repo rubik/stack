@@ -37,7 +37,7 @@ import           Data.Version (showVersion)
 #ifdef USE_GIT_INFO
 import           Development.GitRev (gitCommitCount, gitHash)
 #endif
-import           Distribution.System (buildArch)
+import           Distribution.System (buildArch, buildPlatform)
 import           Distribution.Text (display)
 import           GHC.IO.Encoding (mkTextEncoding, textEncodingName)
 import           Network.HTTP.Client
@@ -76,6 +76,7 @@ import           Stack.Package (getCabalFileName)
 import qualified Stack.PackageIndex
 import           Stack.SDist (getSDistTarball, checkSDistTarball, checkSDistTarball')
 import           Stack.Setup
+import qualified Stack.Sig as Sig
 import           Stack.Solver (solveExtraDeps)
 import           Stack.Types
 import           Stack.Types.Internal
@@ -83,6 +84,7 @@ import           Stack.Types.StackT
 import           Stack.Upgrade
 import qualified Stack.Upload as Upload
 import           System.Directory (canonicalizePath, doesFileExist, doesDirectoryExist, createDirectoryIfMissing)
+import qualified System.Directory as Directory (findExecutable)
 import           System.Environment (getEnvironment, getProgName)
 import           System.Exit
 import           System.FileLock (lockFile, tryLockFile, unlockFile, SharedExclusive(Exclusive), FileLock)
@@ -146,6 +148,21 @@ main = withInterpreterArgs stackProgName $ \args isInterpreter -> do
          "stack - The Haskell Tool Stack"
          ""
          (globalOpts False)
+         -- when there's a parse failure
+         (Just $ \f as ->
+           -- fall-through to external executables in `git` style if they exist
+           -- (i.e. `stack something` looks for `stack-something` before
+           -- failing with "Invalid argument `something'")
+           case stripPrefix "Invalid argument" (fst (renderFailure f "")) of
+             Just _ -> do
+               mExternalExec <- Directory.findExecutable ("stack-" ++ head as)
+               case mExternalExec of
+                 Just ex -> do
+                   menv <- getEnvOverride buildPlatform
+                   runNoLoggingT (exec menv ex (tail as))
+                 Nothing -> handleParseResult (Failure f)
+             Nothing -> handleParseResult (Failure f)
+         )
          (do addCommand' "build"
                         "Build the package(s) in this directory/configuration"
                         cmdFooter
@@ -238,10 +255,13 @@ main = withInterpreterArgs stackProgName $ \args isInterpreter -> do
                         "Upload a package to Hackage"
                         cmdFooter
                         uploadCmd
-                        ((,,)
+                        ((,,,)
                          <$> many (strArgument $ metavar "TARBALL/DIR")
                          <*> optional pvpBoundsOption
-                         <*> ignoreCheckSwitch)
+                         <*> ignoreCheckSwitch
+                         <*> flag False True
+                              (long "sign" <>
+                               help "GPG sign & submit signature"))
              addCommand' "sdist"
                         "Create source distribution tarballs"
                         cmdFooter
@@ -389,7 +409,21 @@ main = withInterpreterArgs stackProgName $ \args isInterpreter -> do
                             "Generate HPC report a combined HPC report"
                             cmdFooter
                             hpcReportCmd
-                            hpcReportOptsParser))
+                            hpcReportOptsParser)
+             addSubCommands'
+               Sig.sigCmdName
+               "Subcommands specific to package signatures (EXPERIMENTAL)"
+               cmdFooter
+               (do addSubCommands'
+                     Sig.sigSignCmdName
+                     "Sign a a single package or all your packages"
+                     cmdFooter
+                     (do addCommand'
+                           Sig.sigSignSdistCmdName
+                           "Sign a single sdist package file"
+                           cmdFooter
+                           sigSignSdistCmd
+                           Sig.sigSignSdistOpts)))
      case eGlobalRun of
        Left (exitCode :: ExitCode) -> do
          when isInterpreter $
@@ -606,7 +640,7 @@ setupCmd SetupCmdOpts{..} go@GlobalOpts{..} = do
                   case scoCompilerVersion of
                       Just v -> return (v, MatchMinor, Nothing)
                       Nothing -> do
-                          bc <- lcLoadBuildConfig lc globalResolver globalCompiler
+                          bc <- lcLoadBuildConfig lc globalCompiler
                           return ( bcWantedCompiler bc
                                  , configCompilerCheck (lcConfig lc)
                                  , Just $ bcStackYaml bc
@@ -750,7 +784,7 @@ withBuildConfigExt go@GlobalOpts{..} mbefore inner mafter = do
 
       let inner'' lk = do
               bconfig <- runStackLoggingTGlobal manager go $
-                  lcLoadBuildConfig lc globalResolver globalCompiler
+                  lcLoadBuildConfig lc globalCompiler
               envConfig <-
                  runStackTGlobal
                      manager bconfig go
@@ -814,9 +848,9 @@ upgradeCmd (fromGit, repo) go = withConfigAndLock go $
 #endif
 
 -- | Upload to Hackage
-uploadCmd :: ([String], Maybe PvpBounds, Bool) -> GlobalOpts -> IO ()
-uploadCmd ([], _, _) _ = error "To upload the current package, please run 'stack upload .'"
-uploadCmd (args, mpvpBounds, ignoreCheck) go = do
+uploadCmd :: ([String], Maybe PvpBounds, Bool, Bool) -> GlobalOpts -> IO ()
+uploadCmd ([], _, _, _) _ = error "To upload the current package, please run 'stack upload .'"
+uploadCmd (args, mpvpBounds, ignoreCheck, shouldSign) go = do
     let partitionM _ [] = return ([], [])
         partitionM f (x:xs) = do
             r <- f x
@@ -827,6 +861,7 @@ uploadCmd (args, mpvpBounds, ignoreCheck) go = do
     unless (null invalid) $ error $
         "stack upload expects a list sdist tarballs or cabal directories.  Can't find " ++
         show invalid
+    (_,lc) <- liftIO $ loadConfigWithOpts go
     let getUploader :: (HasStackRoot config, HasPlatform config, HasConfig config) => StackT config IO Upload.Uploader
         getUploader = do
             config <- asks getConfig
@@ -834,17 +869,37 @@ uploadCmd (args, mpvpBounds, ignoreCheck) go = do
             let uploadSettings =
                     Upload.setGetManager (return manager) Upload.defaultUploadSettings
             liftIO $ Upload.mkUploader config uploadSettings
+        sigServiceUrl = "https://sig.commercialhaskell.org/"
     withBuildConfigAndLock go $ \_ -> do
         uploader <- getUploader
         unless ignoreCheck $
             mapM_ (parseRelAsAbsFile >=> checkSDistTarball) files
-        liftIO $ forM_ files (canonicalizePath >=> Upload.upload uploader)
+        forM_
+            files
+            (\file ->
+                  do tarFile <- parseRelAsAbsFile file
+                     liftIO
+                         (Upload.upload uploader (toFilePath tarFile))
+                     when
+                         shouldSign
+                         (Sig.sign
+                              (lcProjectRoot lc)
+                              sigServiceUrl
+                              tarFile))
         unless (null dirs) $
             forM_ dirs $ \dir -> do
                 pkgDir <- parseRelAsAbsDir dir
                 (tarName, tarBytes) <- getSDistTarball mpvpBounds pkgDir
                 unless ignoreCheck $ checkSDistTarball' tarName tarBytes
                 liftIO $ Upload.uploadBytes uploader tarName tarBytes
+                tarPath <- parseRelFile tarName
+                when
+                    shouldSign
+                    (Sig.signTarBytes
+                         (lcProjectRoot lc)
+                         sigServiceUrl
+                         tarPath
+                         tarBytes)
 
 sdistCmd :: ([String], Maybe PvpBounds, Bool) -> GlobalOpts -> IO ()
 sdistCmd (dirs, mpvpBounds, ignoreCheck) go =
@@ -873,17 +928,20 @@ execCmd ExecOpts {..} go@GlobalOpts{..} =
                  (ExecRunGhc, args) -> return ("runghc", args)
             (manager,lc) <- liftIO $ loadConfigWithOpts go
             withUserFileLock go (configStackRoot $ lcConfig lc) $ \lk ->
-             runStackTGlobal manager (lcConfig lc) go $
+              runStackTGlobal manager (lcConfig lc) go $
                 Docker.reexecWithOptionalContainer
                     (lcProjectRoot lc)
                     -- Unlock before transferring control away, whether using docker or not:
                     (Just $ munlockFile lk)
-                    (runStackTGlobal manager (lcConfig lc) go $
-                        exec plainEnvSettings cmd args)
+                    (runStackTGlobal manager (lcConfig lc) go $ do
+                        config <- asks getConfig
+                        menv <- liftIO $ configEnvOverride config plainEnvSettings
+                        exec menv cmd args)
                     Nothing
                     Nothing -- Unlocked already above.
         ExecOptsEmbellished {..} ->
            withBuildConfigAndLock go $ \lk -> do
+               config <- asks getConfig
                (cmd, args) <- case (eoCmd, eoArgs) of
                    (ExecCmd cmd, args) -> return (cmd, args)
                    (ExecGhc, args) -> execCompiler "" args
@@ -896,7 +954,8 @@ execCmd ExecOpts {..} go@GlobalOpts{..} =
                        { boptsTargets = map T.pack targets
                        }
                munlockFile lk -- Unlock before transferring control away.
-               exec eoEnvSettings cmd args
+               menv <- liftIO $ configEnvOverride config eoEnvSettings
+               exec menv cmd args
   where
     execCompiler cmdPrefix args = do
         wc <- getWhichCompiler
@@ -948,7 +1007,7 @@ targetsCmd :: Text -> GlobalOpts -> IO ()
 targetsCmd target go@GlobalOpts{..} =
     withBuildConfig go $
     do let bopts = defaultBuildOpts { boptsTargets = [target] }
-       (_realTargets,_,pkgs) <- ghciSetup bopts False Nothing
+       (_realTargets,_,pkgs) <- ghciSetup bopts False False Nothing
        pwd <- getWorkingDir
        targets <-
            fmap
@@ -1006,6 +1065,18 @@ imgDockerCmd rebuild go@GlobalOpts{..} =
                  Image.stageContainerImageArtifacts)
         (Just Image.createContainerImageFromStage)
 
+sigSignSdistCmd :: (String, String) -> GlobalOpts -> IO ()
+sigSignSdistCmd (url,path) go = do
+    withConfigAndLock
+        go
+        (do (manager,lc) <- liftIO (loadConfigWithOpts go)
+            tarBall <- parseRelAsAbsFile path
+            runStackTGlobal
+                manager
+                (lcConfig lc)
+                go
+                (Sig.sign (lcProjectRoot lc) url tarBall))
+
 -- | Load the configuration with a manager. Convenience function used
 -- throughout this module.
 loadConfigWithOpts :: GlobalOpts -> IO (Manager,LoadConfig (StackLoggingT IO))
@@ -1018,7 +1089,7 @@ loadConfigWithOpts go@GlobalOpts{..} = do
                 path <- canonicalizePath fp >>= parseAbsFile
                 return $ Just path
     lc <- runStackLoggingTGlobal manager go $ do
-        lc <- loadConfig globalConfigMonoid mstackYaml
+        lc <- loadConfig globalConfigMonoid mstackYaml globalResolver
         -- If we have been relaunched in a Docker container, perform in-container initialization
         -- (switch UID, etc.).  We do this after first loading the configuration since it must
         -- happen ASAP but needs a configuration.
