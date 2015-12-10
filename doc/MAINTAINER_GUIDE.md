@@ -6,11 +6,11 @@ The following should be tested minimally before a release is considered good
 to go:
 
 * Ensure `release` and `stable` branches merged to `master`
-* Integration tests pass on a representative sample of platforms: `stack test
-  --flag stack:integration-tests`. The actual release script will perform a more
-  thorough test for every platform/variant prior to uploading, so this is just a
-  pre-check
-* Stack builds with `stack-7.8.yaml`
+* Integration tests pass on a representative sample of platforms: `stack install
+  --pedantic && stack test --pedantic --flag stack:integration-tests` . The actual
+  release script will perform a more thorough test for every platform/variant
+  prior to uploading, so this is just a pre-check
+* Stack builds with `stack-7.8.yaml` (Travis CI now does this)
 * stack can build the wai repo
 * Running `stack build` a second time on either stack or wai is a no-op
 * Build something that depends on `happy` (suggestion: `hlint`), since `happy`
@@ -18,13 +18,15 @@ to go:
 * In release candidate branch:
     * Bump the version number (to even second-to-last component) in the .cabal
       file
-    * Rename Changelog's "unreleased changes" section to the version (check for
-      any entries that snuck into the previous version's changes)
-    * Next release (post-0.1.9.0): Add release note about new documentation/home page
+    * Update the ChangeLog:
+        * Rename the "unreleased changes" section to the new version
+        * Check for any entries that snuck into the previous version's changes
+          due to merges
 * In master branch:
     * Bump version to next odd second-to-last component
     * Add new "unreleased changes" secion in changelog
     * Bump to use latest LTS version
+* Check for any important changes that missed getting an entry in Changelog
 * Review documentation for any changes that need to be made
     * Search for old Stack version, unstable stack version, and the next
       "obvious" version in sequence (if doing a non-obvious jump) and replace
@@ -39,12 +41,6 @@ to go:
   [install_and_upgrade.md](https://github.com/commercialhaskell/stack/blob/master/doc/install_and_upgrade.md),
   and
   [README.md](https://github.com/commercialhaskell/stack/blob/master/README.md)
-* Next release (post-0.1.9.0)
-    - Fix ubuntu/debian repos:
-      https://github.com/commercialhaskell/stack/issues/1378
-    - Test distro package autocompletion to ensure non-absolute path to `stack`
-      works
-      (https://github.com/commercialhaskell/stack/issues/1343#issuecomment-158647308)
 
 ## Release process
 
@@ -69,7 +65,8 @@ for requirements to perform the release, and more details about the tool.
 * On Windows:
     * Ensure your working tree is in `C:\stack` (or a similarly short path)
     * Run `etc\scripts\windows-releases.bat`
-    * Build Windows installers.  See https://github.com/borsboom/stack-installer#readme
+    * Release Windows installers. See
+      [stack-installer README](https://github.com/borsboom/stack-installer#readme)
 
 * Push signed Git tag, matching Github release tag name, e.g.: `git tag -u
   9BEFB442 vX.Y.Z && git push origin vX.Y.Z`
@@ -77,7 +74,7 @@ for requirements to perform the release, and more details about the tool.
 * Reset the `release` branch to the released commit, e.g.: `git checkout release
   && git merge --ff-only vX.Y.Z && git push origin release`
 
-* Update the `stable` branch
+* Update the `stable` branch similarly
 
 * Publish Github release
 
@@ -86,6 +83,8 @@ for requirements to perform the release, and more details about the tool.
   and add the new linux64 stack bindist
 
 * Upload package to Hackage: `stack upload . --pvp-bounds=both`
+
+* Upload haddocks to Hackage: `etc/scripts/upload-haddocks.sh`
 
 * Activate version for new release tag on
   [readthedocs.org](https://readthedocs.org/projects/stack/versions/), and
@@ -98,18 +97,13 @@ for requirements to perform the release, and more details about the tool.
   [haskell-stack.git](ssh+git://aur@aur.archlinux.org/haskell-stack.git):
   `PKGBUILD` and `.SRCINFO`
       * Be sure to reset `pkgrel` in both files, and update the SHA1 sum
-      * Next release (post-0.1.9.0): update home page to haskellstack.org
 
 * Submit a PR for the
   [haskell-stack Homebrew formula](https://github.com/Homebrew/homebrew/blob/master/Library/Formula/haskell-stack.rb)
       * Be sure to update the SHA sum
       * The commit message should just be `haskell-stack <VERSION>`
-      * Next release (post-0.1.9.0): update home page to haskellstack.org
 
 * [Build new MinGHC distribution](#update-minghc)
-
-* [Upload haddocks to Hackage](#upload-haddocks-to-hackage), if hackage couldn't
-  build on its own
 
 * Keep an eye on the
   [Hackage matrix builder](http://matrix.hackage.haskell.org/package/stack)
@@ -117,32 +111,9 @@ for requirements to perform the release, and more details about the tool.
 * Announce to haskell-cafe@haskell.org, haskell-stack@googlegroups.com,
   commercialhaskell@googlegroups.com mailing lists
 
-* Next release (post-0.1.9.0): update home page to haskellstack.org:
-    * Do a google search for old URL
-    * Update stackage.org home page
+* Merge any changes made in the RC/release/stable branches to master.
 
 ## Extra steps
-
-### Upload haddocks to Hackage
-
-* Set `STACKVER` environment variable to the Stack version (e.g. `0.1.6.0`)
-* Run:
-
-```
-stack haddock
-STACKDOCDIR=stack-$STACKVER-docs
-rm -rf _release/$STACKDOCDIR
-mkdir -p _release
-cp -r $(stack path --local-doc-root)/stack-$STACKVER _release/$STACKDOCDIR
-sed -i '' 's/href="\.\.\/\([^/]*\)\//href="..\/..\/\1\/docs\//g' _release/$STACKDOCDIR/*.html
-(cd _release && tar cvz --format=ustar -f $STACKDOCDIR.tar.gz $STACKDOCDIR)
-curl -X PUT \
-     -H 'Content-Type: application/x-tar' \
-     -H 'Content-Encoding: gzip' \
-     -u borsboom \
-     --data-binary "@_release/$STACKDOCDIR.tar.gz" \
-     "https://hackage.haskell.org/package/stack-$STACKVER/docs"
-```
 
 ### Update MinGHC
 
@@ -152,11 +123,12 @@ abbreviated set specifically for including the latest stack version.
 
 * Ensure `makensis.exe` and `signtool.exe` are on your PATH.
 * If you edit build-post-install.hs, run `stack exec -- cmd /c build-post-install.bat`
-* Set `STACKVER` environment variable to latest Stack verion (e.g. `0.1.6.0`)
+* Set `STACKVER` environment variable to latest Stack verion (e.g. `0.1.10.0`)
 * Adjust commands below for new GHC versions
 * Run:
 
 ```
+del .build\*.nsi
 stack build
 stack exec -- minghc-generate 7.10.2 --stack=%STACKVER%
 signtool sign /v /n "FP Complete, Corporation" /t "http://timestamp.verisign.com/scripts/timestamp.dll" .build\minghc-7.10.2-i386.exe

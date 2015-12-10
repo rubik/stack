@@ -16,6 +16,7 @@ module Stack.Docker
   ,reexecWithOptionalContainer
   ,reset
   ,reExecArgName
+  ,StackDockerException(..)
   ) where
 
 import           Control.Applicative
@@ -78,6 +79,7 @@ import           System.Process (CreateProcess(delegate_ctlc))
 import           Text.Printf (printf)
 
 #ifndef WINDOWS
+import           Control.Concurrent (threadDelay)
 import           Control.Monad.Trans.Control (liftBaseWith)
 import           System.Posix.Signals
 #endif
@@ -233,11 +235,11 @@ getInContainer = liftIO (isJust <$> lookupEnv inContainerEnvVar)
 
 -- | Run a command in a new Docker container, then exit the process.
 runContainerAndExit :: M env m
-                    => GetCmdArgs env m
-                    -> Maybe (Path Abs Dir)
-                    -> m ()
-                    -> m ()
-                    -> m ()
+  => GetCmdArgs env m
+  -> Maybe (Path Abs Dir) -- ^ Project root (maybe)
+  -> m ()              -- ^ Action to run before
+  -> m ()              -- ^ Action to run after
+  -> m ()
 runContainerAndExit getCmdArgs
                     mprojectRoot
                     before
@@ -271,11 +273,11 @@ runContainerAndExit getCmdArgs
                   Just ii2 -> return ii2
                   Nothing -> throwM (InspectFailedException image)
          | otherwise -> throwM (NotPulledException image)
+     sandboxDir <- projectDockerSandboxDir projectRoot
      let ImageConfig {..} = iiConfig
          imageEnvVars = map (break (== '=')) icEnv
          platformVariant = BS.unpack $ Hash.digestToHexByteString $ hashRepoName image
          stackRoot = configStackRoot config
-         sandboxDir = projectDockerSandboxDir projectRoot
          sandboxHomeDir = sandboxDir </> homeDirName
          isTerm = not (dockerDetach docker) &&
                   isStdinTerminal &&
@@ -295,7 +297,7 @@ runContainerAndExit getCmdArgs
      pwd <- getWorkingDir
      liftIO
        (do updateDockerImageLastUsed config iiId (toFilePath projectRoot)
-           mapM_ createTree ([sandboxHomeDir, stackRoot]))
+           mapM_ createTree [sandboxHomeDir, stackRoot])
      containerID <- (trim . decodeUtf8) <$> readDockerProcess
        envOverride
        (concat
@@ -330,10 +332,14 @@ runContainerAndExit getCmdArgs
      before
 #ifndef WINDOWS
      runInBase <- liftBaseWith $ \run -> return (void . run)
-     oldHandlers <- forM ([sigINT | not keepStdinOpen] ++ [sigTERM]) $ \sig -> do
-       let sigHandler = do
-             runInBase (readProcessNull Nothing envOverride "docker"
-                                        ["kill","--signal=" ++ show sig,containerID])
+     oldHandlers <- forM [sigINT,sigABRT,sigHUP,sigPIPE,sigTERM,sigUSR1,sigUSR2] $ \sig -> do
+       let sigHandler = runInBase $ do
+             readProcessNull Nothing envOverride "docker"
+                             ["kill","--signal=" ++ show sig,containerID]
+             when (sig `elem` [sigTERM,sigABRT]) $ do
+               -- Give the container 30 seconds to exit gracefully, then send a sigKILL to force it
+               liftIO $ threadDelay 30000000
+               readProcessNull Nothing envOverride "docker" ["kill",containerID]
        oldHandler <- liftIO $ installHandler sig (Catch sigHandler) Nothing
        return (sig, oldHandler)
 #endif
@@ -344,16 +350,19 @@ runContainerAndExit getCmdArgs
                          ,["-a" | not (dockerDetach docker)]
                          ,["-i" | keepStdinOpen]
                          ,[containerID]])
-     e <- try (callProcess'
-                 (if keepStdinOpen then id else (\cp -> cp { delegate_ctlc = False }))
-                 cmd
-                 )
+     e <- finally
+         (try $ callProcess'
+             (\cp -> cp { delegate_ctlc = False })
+             cmd)
+         (do unless (dockerPersist docker || dockerDetach docker) $
+               catch
+                 (readProcessNull Nothing envOverride "docker" ["rm","-f",containerID])
+                 (\(_::ReadProcessException) -> return ())
 #ifndef WINDOWS
-     forM_ oldHandlers $ \(sig,oldHandler) ->
-       liftIO $ installHandler sig oldHandler Nothing
+             forM_ oldHandlers $ \(sig,oldHandler) ->
+               liftIO $ installHandler sig oldHandler Nothing
 #endif
-     unless (dockerPersist docker || dockerDetach docker)
-            (readProcessNull Nothing envOverride "docker" ["rm","-f",containerID])
+         )
      case e of
        Left (ProcessExitedUnsuccessfully _ ec) -> liftIO (exitWith ec)
        Right () -> do after
@@ -439,8 +448,8 @@ cleanup opts =
                         | otherwise -> throwM (InvalidCleanupCommandException line)
              e <- try (readDockerProcess envOverride args)
              case e of
-               Left (ReadProcessException{}) ->
-                 $logError (concatT ["Could not remove: '",v,"'"])
+               Left ex@ReadProcessException{} ->
+                 $logError (concatT ["Could not remove: '",v,"': ", show ex])
                Left e' -> throwM e'
                Right _ -> return ()
         _ -> throwM (InvalidCleanupCommandException line)
@@ -521,10 +530,10 @@ cleanup opts =
             Nothing -> return ()
         sortCreated =
             sortWith (\(_,_,x) -> Down x) .
-            (mapMaybe (\(h,r) ->
+             mapMaybe (\(h,r) ->
                 case Map.lookup h inspectMap of
                     Nothing -> Nothing
-                    Just ii -> Just (h,r,iiCreated ii)))
+                    Just ii -> Just (h,r,iiCreated ii))
         buildSection sectionHead items itemBuilder =
           do let (anyWrote,b) = runWriter (forM items itemBuilder)
              when (or anyWrote) $
@@ -562,7 +571,7 @@ cleanup opts =
                      projectPath)
         buildInspect hash =
           case Map.lookup hash inspectMap of
-            Just (Inspect{iiCreated,iiVirtualSize}) ->
+            Just Inspect{iiCreated,iiVirtualSize} ->
               buildInfo ("Created " ++
                          showDaysAgo iiCreated ++
                          maybe ""
@@ -620,7 +629,8 @@ inspects envOverride images =
          case eitherDecode (LBS.pack (filter isAscii (decodeUtf8 inspectOut))) of
            Left msg -> throwM (InvalidInspectOutputException msg)
            Right results -> return (Map.fromList (map (\r -> (iiId r,r)) results))
-       Left (ReadProcessException{}) -> return Map.empty
+       Left (ReadProcessException _ _ _ err)
+         | "Error: No such image" `LBS.isPrefixOf` err -> return Map.empty
        Left e -> throwM e
 
 -- | Pull latest version of configured Docker image from registry.
@@ -679,10 +689,12 @@ checkDockerVersion envOverride docker =
         prohibitedDockerVersions = []
 
 -- | Remove the project's Docker sandbox.
-reset :: (MonadIO m) => Maybe (Path Abs Dir) -> Bool -> m ()
-reset maybeProjectRoot keepHome =
+reset :: (MonadIO m, MonadReader env m, HasConfig env)
+  => Maybe (Path Abs Dir) -> Bool -> m ()
+reset maybeProjectRoot keepHome = do
+  dockerSandboxDir <- projectDockerSandboxDir projectRoot
   liftIO (removeDirectoryContents
-            (projectDockerSandboxDir projectRoot)
+            dockerSandboxDir
             [homeDirName | keepHome]
             [])
   where projectRoot = fromMaybeProjectRoot maybeProjectRoot
@@ -691,7 +703,7 @@ reset maybeProjectRoot keepHome =
 -- a container, such as switching the UID/GID to the "outside-Docker" user's.
 entrypoint :: (MonadIO m, MonadBaseControl IO m, MonadCatch m, MonadLogger m)
            => Config -> DockerEntrypoint -> m ()
-entrypoint config@Config{..} DockerEntrypoint{..} = do
+entrypoint config@Config{..} DockerEntrypoint{..} =
   modifyMVar_ entrypointMVar $ \alreadyRan -> do
     -- Only run the entrypoint once
     unless alreadyRan $ do

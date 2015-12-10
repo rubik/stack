@@ -15,6 +15,7 @@ module Stack.Options
     ,globalOptsParser
     ,initOptsParser
     ,newOptsParser
+    ,nixOptsParser
     ,logLevelOptsParser
     ,ghciOptsParser
     ,solverOptsParser
@@ -52,6 +53,7 @@ import           Stack.Dot
 import           Stack.Ghci (GhciOpts(..))
 import           Stack.Init
 import           Stack.New
+import           Stack.Nix
 import           Stack.Types
 import           Stack.Types.TemplateName
 
@@ -232,8 +234,10 @@ cleanOptsParser = CleanOpts <$> packages
 -- | Command-line arguments parser for configuration.
 configOptsParser :: Bool -> Parser ConfigMonoid
 configOptsParser hide0 =
-    (\opts systemGHC installGHC arch os ghcVariant jobs includes libs skipGHCCheck skipMsys localBin modifyCodePage -> mempty
-        { configMonoidDockerOpts = opts
+    (\workDir dockerOpts nixOpts systemGHC installGHC arch os ghcVariant jobs includes libs skipGHCCheck skipMsys localBin modifyCodePage -> mempty
+        { configMonoidWorkDir = workDir
+        , configMonoidDockerOpts = dockerOpts
+        , configMonoidNixOpts = nixOpts
         , configMonoidSystemGHC = systemGHC
         , configMonoidInstallGHC = installGHC
         , configMonoidSkipGHCCheck = skipGHCCheck
@@ -247,7 +251,14 @@ configOptsParser hide0 =
         , configMonoidLocalBinPath = localBin
         , configMonoidModifyCodePage = modifyCodePage
         })
-    <$> dockerOptsParser True
+    <$> optional (strOption
+            ( long "work-dir"
+            <> metavar "WORK-DIR"
+            <> help "Override work directory (default: .stack-work)"
+            <> hide
+            ))
+    <*> dockerOptsParser True
+    <*> nixOptsParser True
     <*> maybeBoolFlags
             "system-ghc"
             "using the system installed GHC (on the PATH) if available and a matching version"
@@ -307,6 +318,24 @@ configOptsParser hide0 =
             "setting the codepage to support UTF-8 (Windows only)"
             hide
   where hide = hideMods hide0
+
+nixOptsParser :: Bool -> Parser NixOptsMonoid
+nixOptsParser hide0 =
+  NixOptsMonoid
+  <$> pure False
+  <*> maybeBoolFlags nixCmdName
+                     "using a Nix-shell"
+                     hide
+  <*> pure []
+  <*> pure Nothing
+  <*> ((map T.pack . fromMaybe [])
+       <$> optional (argsOption (long "nix-shell-options" <>
+                                 metavar "OPTION" <>
+                                 help "Additional options passed to nix-shell" <>
+                                 hide)))
+  where
+    hide = hideMods hide0
+
 
 -- | Options parser configuration for Docker.
 dockerOptsParser :: Bool -> Parser DockerOptsMonoid
@@ -536,12 +565,12 @@ execOptsExtraParser = eoPlainParser <|>
                            help "Use an unmodified environment (only useful with Docker)")
 
 -- | Parser for global command-line options.
-globalOptsParser :: Bool -> Parser GlobalOptsMonoid
-globalOptsParser hide0 =
+globalOptsParser :: Bool -> Maybe LogLevel -> Parser GlobalOptsMonoid
+globalOptsParser hide0 defLogLevel =
     GlobalOptsMonoid <$>
     optional (strOption (long Docker.reExecArgName <> hidden <> internal)) <*>
     optional (option auto (long dockerEntrypointArgName <> hidden <> internal)) <*>
-    logLevelOptsParser hide0 <*>
+    logLevelOptsParser hide0 defLogLevel <*>
     configOptsParser hide0 <*>
     optional (abstractResolverOptsParser hide0) <*>
     optional (compilerOptsParser hide0) <*>
@@ -561,11 +590,11 @@ globalOptsFromMonoid :: Bool -> GlobalOptsMonoid -> GlobalOpts
 globalOptsFromMonoid defaultTerminal GlobalOptsMonoid{..} = GlobalOpts
     { globalReExecVersion = globalMonoidReExecVersion
     , globalDockerEntrypoint = globalMonoidDockerEntrypoint
-    , globalLogLevel = fromMaybe defaultLogLevel (globalMonoidLogLevel)
+    , globalLogLevel = fromMaybe defaultLogLevel globalMonoidLogLevel
     , globalConfigMonoid = globalMonoidConfigMonoid
     , globalResolver = globalMonoidResolver
     , globalCompiler = globalMonoidCompiler
-    , globalTerminal = fromMaybe defaultTerminal (globalMonoidTerminal)
+    , globalTerminal = fromMaybe defaultTerminal globalMonoidTerminal
     , globalStackYaml = globalMonoidStackYaml }
 
 initOptsParser :: Parser InitOpts
@@ -599,9 +628,9 @@ initOptsParser =
          metavar "RESOLVER" <>
          help "Use the given resolver, even if not all dependencies are met")
 
--- | Parse for a logging level.
-logLevelOptsParser :: Bool -> Parser (Maybe LogLevel)
-logLevelOptsParser hide =
+-- | Parser for a logging level.
+logLevelOptsParser :: Bool -> Maybe LogLevel -> Parser (Maybe LogLevel)
+logLevelOptsParser hide defLogLevel =
   fmap (Just . parse)
        (strOption (long "verbosity" <>
                    metavar "VERBOSITY" <>
@@ -611,7 +640,7 @@ logLevelOptsParser hide =
        (short 'v' <> long "verbose" <>
         help ("Enable verbose mode: verbosity level \"" <> showLevel verboseLevel <> "\"") <>
         hideMods hide) <|>
-  pure Nothing
+  pure defLogLevel
   where verboseLevel = LevelDebug
         showLevel l =
           case l of

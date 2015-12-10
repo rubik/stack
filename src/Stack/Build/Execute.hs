@@ -56,6 +56,7 @@ import           Data.Text.Encoding (decodeUtf8)
 import           Data.Time.Clock (getCurrentTime)
 import           Data.Traversable (forM)
 import           Data.Word8 (_colon)
+import qualified Distribution.PackageDescription as C
 import           Distribution.System            (OS (Windows),
                                                  Platform (Platform))
 import           Language.Haskell.TH as TH (location)
@@ -91,7 +92,7 @@ import           System.Process.Run
 import           System.Process.Internals (createProcess_)
 #endif
 
-type M env m = (MonadIO m,MonadReader env m,HasHttpManager env,HasBuildConfig env,MonadLogger m,MonadBaseControl IO m,MonadCatch m,MonadMask m,HasLogLevel env,HasEnvConfig env,HasTerminal env)
+type M env m = (MonadIO m,MonadReader env m,HasHttpManager env,HasBuildConfig env,MonadLogger m,MonadBaseControl IO m,MonadCatch m,MonadMask m,HasLogLevel env,HasEnvConfig env,HasTerminal env, HasConfig env)
 
 -- | Fetch the packages necessary for a build, for example in combination with a dry run.
 preFetch :: M env m => Plan -> m ()
@@ -221,7 +222,7 @@ getSetupExe :: M env m
 getSetupExe setupHs tmpdir = do
     wc <- getWhichCompiler
     econfig <- asks getEnvConfig
-    platformDir <- platformVariantRelDir
+    platformDir <- platformGhcRelDir
     let config = getConfig econfig
         baseNameS = concat
             [ "setup-Simple-Cabal-"
@@ -1167,22 +1168,23 @@ singleTest runInBase topts testsToRun ac ee task installedMap = do
                           else return True
 
         when toRun $ do
-            bconfig <- asks getBuildConfig
             buildDir <- distDirFromDir pkgDir
             hpcDir <- hpcDirFromDir pkgDir
             when needHpc (createTree hpcDir)
-            let exeExtension =
-                    case configPlatform $ getConfig bconfig of
-                        Platform _ Windows -> ".exe"
-                        _ -> ""
 
-            errs <- liftM Map.unions $ forM testsToRun $ \testName -> do
-                nameDir <- parseRelDir $ T.unpack testName
-                nameExe <- parseRelFile $ T.unpack testName ++ exeExtension
-                nameTix <- liftM (pkgDir </>) $ parseRelFile $ T.unpack testName ++ ".tix"
-                let exeName = buildDir </> $(mkRelDir "build") </> nameDir </> nameExe
-                exists <- fileExists exeName
-                menv <- liftIO $ configEnvOverride config EnvSettings
+            errs <- liftM Map.unions $ forM (Map.toList (packageTests package)) $ \(testName, suiteInterface) -> do
+                let stestName = T.unpack testName
+                (testName', isTestTypeLib) <-
+                    case suiteInterface of
+                        C.TestSuiteLibV09{} -> return (stestName ++ "Stub", True)
+                        C.TestSuiteExeV10{} -> return (stestName, False)
+                        interface -> throwM (TestSuiteTypeUnsupported interface)
+
+                exeName <- testExeName testName'
+                tixPath <- liftM (pkgDir </>) $ parseRelFile $ exeName ++ ".tix"
+                exePath <- liftM (buildDir </>) $ parseRelFile $ "build/" ++ testName' ++ "/" ++ exeName
+                exists <- fileExists exePath
+                menv <- liftIO $    configEnvOverride config EnvSettings
                     { esIncludeLocals = taskLocation task == Local
                     , esIncludeGhcPackagePath = True
                     , esStackExe = True
@@ -1192,17 +1194,17 @@ singleTest runInBase topts testsToRun ac ee task installedMap = do
                     then do
                         -- We clear out the .tix files before doing a run.
                         when needHpc $ do
-                            tixexists <- fileExists nameTix
+                            tixexists <- fileExists tixPath
                             when tixexists $
-                                $logWarn ("Removing HPC file " <> T.pack (toFilePath nameTix))
-                            removeFileIfExists nameTix
+                                $logWarn ("Removing HPC file " <> T.pack (toFilePath tixPath))
+                            removeFileIfExists tixPath
 
                         let args = toAdditionalArgs topts
                             argsDisplay = case args of
                                             [] -> ""
                                             _ -> ", args: " <> T.intercalate " " (map showProcessArgDebug args)
                         announce $ "test (suite: " <> testName <> argsDisplay <> ")"
-                        let cp = (proc (toFilePath exeName) args)
+                        let cp = (proc (toFilePath exePath) args)
                                 { cwd = Just $ toFilePath pkgDir
                                 , Process.env = envHelper menv
                                 , std_in = CreatePipe
@@ -1218,13 +1220,17 @@ singleTest runInBase topts testsToRun ac ee task installedMap = do
 
                         -- Use createProcess_ to avoid the log file being closed afterwards
                         (Just inH, Nothing, Nothing, ph) <- liftIO $ createProcess_ "singleBuild.runTests" cp
+                        when isTestTypeLib $ do
+                            logPath <- buildLogPath package (Just stestName)
+                            createTree (parent logPath)
+                            liftIO $ hPutStr inH $ show (logPath, testName)
                         liftIO $ hClose inH
                         ec <- liftIO $ waitForProcess ph
                         -- Move the .tix file out of the package
                         -- directory into the hpc work dir, for
                         -- tidiness.
                         when needHpc $
-                            updateTixFile (packageName package) nameTix
+                            updateTixFile (packageName package) tixPath
                         return $ case ec of
                             ExitSuccess -> Map.empty
                             _ -> Map.singleton testName $ Just ec
@@ -1237,7 +1243,13 @@ singleTest runInBase topts testsToRun ac ee task installedMap = do
                             ]
                         return $ Map.singleton testName Nothing
 
-            when needHpc $ generateHpcReport pkgDir package testsToRun
+            when needHpc $ do
+                let testsToRun' = map f testsToRun
+                    f tName =
+                        case Map.lookup tName (packageTests package) of
+                            Just C.TestSuiteLibV09{} -> tName <> "Stub"
+                            _ -> tName
+                generateHpcReport pkgDir package testsToRun'
 
             bs <- liftIO $
                 case mlogFile of

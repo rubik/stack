@@ -70,6 +70,9 @@ If you have a popular [brew](http://brew.sh/) tool installed, you can just do:
 brew install haskell-stack
 ```
 
+Note: the Homebrew formula and bottles lag slightly behind new Stack releases,
+but tend to be updated within a day or two.
+
 ### Manual download
 
 * Download the latest release:
@@ -93,23 +96,23 @@ Yosemite and Mavericks as well, and may also work on older versions (YMMV).
 
       * Ubuntu 15.10 (amd64):
 
-            echo 'deb http://download.fpcomplete.com/ubuntu/wily stable main'|sudo tee /etc/apt/sources.list.d/fpco.list
+            echo 'deb http://download.fpcomplete.com/ubuntu wily main'|sudo tee /etc/apt/sources.list.d/fpco.list
 
       * Ubuntu 15.04 (amd64):
 
-            echo 'deb http://download.fpcomplete.com/ubuntu/vivid stable main'|sudo tee /etc/apt/sources.list.d/fpco.list
+            echo 'deb http://download.fpcomplete.com/ubuntu vivid main'|sudo tee /etc/apt/sources.list.d/fpco.list
 
       * Ubuntu 14.10 (amd64)
 
-            echo 'deb http://download.fpcomplete.com/ubuntu/utopic stable main'|sudo tee /etc/apt/sources.list.d/fpco.list
+            echo 'deb http://download.fpcomplete.com/ubuntu utopic main'|sudo tee /etc/apt/sources.list.d/fpco.list
 
       * Ubuntu 14.04 (amd64)
 
-            echo 'deb http://download.fpcomplete.com/ubuntu/trusty stable main'|sudo tee /etc/apt/sources.list.d/fpco.list
+            echo 'deb http://download.fpcomplete.com/ubuntu trusty main'|sudo tee /etc/apt/sources.list.d/fpco.list
 
       * Ubuntu 12.04 (amd64)
 
-            echo 'deb http://download.fpcomplete.com/ubuntu/precise stable main'|sudo tee /etc/apt/sources.list.d/fpco.list
+            echo 'deb http://download.fpcomplete.com/ubuntu precise main'|sudo tee /etc/apt/sources.list.d/fpco.list
 
  3. Update apt and install
 
@@ -121,17 +124,17 @@ Yosemite and Mavericks as well, and may also work on older versions (YMMV).
 
  1. Get the FP Complete key:
 
-        wget -q -O- https://s3.amazonaws.com/download.fpcomplete.com/debian/fpco.key | sudo apt-key add -
+        sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 575159689BEFB442
 
  2. Add the appropriate source repository:
 
       * Debian 8 (amd64):
 
-            echo 'deb http://download.fpcomplete.com/debian/jessie stable main'|sudo tee /etc/apt/sources.list.d/fpco.list
+            echo 'deb http://download.fpcomplete.com/debian jessie main'|sudo tee /etc/apt/sources.list.d/fpco.list
 
       * Debian 7 (amd64)
 
-            echo 'deb http://download.fpcomplete.com/debian/wheezy stable main'|sudo tee /etc/apt/sources.list.d/fpco.list
+            echo 'deb http://download.fpcomplete.com/debian wheezy main'|sudo tee /etc/apt/sources.list.d/fpco.list
 
  3. Update apt and install
 
@@ -157,7 +160,10 @@ Yosemite and Mavericks as well, and may also work on older versions (YMMV).
 
 ## Fedora
 
-*note*: for 32-bit, you can use this [Fedora Copr repo](https://copr.fedoraproject.org/coprs/petersen/stack/) which can be enabled with:
+*Note*: for 32-bit, you can use this
+ [Fedora Copr repo](https://copr.fedoraproject.org/coprs/petersen/stack/) (not
+ managed by the Stack release team, so not guaranteed to have the very latest
+ version) which can be enabled with:
 
     sudo dnf copr enable petersen/stack
 
@@ -184,6 +190,30 @@ Yosemite and Mavericks as well, and may also work on older versions (YMMV).
       * Fedora < 22
 
             sudo yum -y install stack
+
+## openSUSE / SUSE Linux Enterprise
+
+*Note:* openSUSE's and SLE's `stack` package isn't managed by the Stack release
+team, and since it is based on the version in Stackage LTS, and may lag new
+releases by ten days or more.
+
+ 1. Add the appropriate OBS repository:
+
+      * openSUSE Tumbleweed
+
+        all needed is in distribution
+
+      * openSUSE Leap
+
+            sudo zypper ar http://download.opensuse.org/repositories/devel:/languages:/haskell/openSUSE_Leap_42.1/devel:languages:haskell.repo
+
+      * SUSE Linux Enterprise 12
+
+            sudo zypper ar http://download.opensuse.org/repositories/devel:/languages:/haskell/SLE_12/devel:languages:haskell.repo 
+
+ 2. Install:
+
+        sudo zypper in stack
 
 ## Arch Linux
 

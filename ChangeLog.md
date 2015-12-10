@@ -1,8 +1,46 @@
 # Changelog
 
-## Unreleased changes
+## 0.1.10.0
+
+Release notes:
+
+* The Stack home page is now at [haskellstack.org](http://haskellstack.org),
+  which shows the documentation rendered by readthedocs.org. Note: this
+  has necessitated some changes to the links in the documentation's markdown
+  source code, so please check the links on the website before submitting a PR
+  to fix them.
+* The locations of the
+  [Ubuntu](http://docs.haskellstack.org/en/stable/install_and_upgrade.html#ubuntu)
+  and
+  [Debian](http://docs.haskellstack.org/en/stable/install_and_upgrade.html#debian)
+  package repositories have changed to have correct URL semantics according to
+  Debian's guidelines
+  [#1378](https://github.com/commercialhaskell/stack/issues/1378). The old
+  locations will continue to work for some months, but we suggest that you
+  adjust your `/etc/apt/sources.list.d/fpco.list` to the new location to avoid
+  future disruption.
+* [openSUSE and SUSE Linux Enterprise](http://docs.haskellstack.org/en/stable/install_and_upgrade.html#opensuse-suse-linux-enterprise)
+  packages are now available, thanks to [@mimi1vx](https://github.com/mimi1vx).
+  Note: there will be some lag before these pick up new versions, as they are
+  based on Stackage LTS.
 
 Major changes:
+
+
+Other enhancements:
+
+
+Bug fixes:
+
+
+## 0.1.10.0
+
+Major changes:
+
+* Support for building inside a Nix-shell providing system dependencies
+  [#1285](https://github.com/commercialhaskell/stack/pull/1285)
+* Add optional GPG signing on `stack upload --sign` or with
+  `stack sig sign ...`
 
 Other enhancements:
 
@@ -12,11 +50,17 @@ Other enhancements:
   [#1397](https://github.com/commercialhaskell/stack/issues/1397)
 * Only run benchmarks specified as build targets
   [#1412](https://github.com/commercialhaskell/stack/issues/1412)
-* Add optional GPG signing on `stack upload --sign` or with
-  `stack sig sign ...`
 * Support git-style executable fall-through (`stack something` executes
   `stack-something` if present)
   [#1433](https://github.com/commercialhaskell/stack/issues/1433)
+* GHCi now loads intermediate dependencies
+  [#584](https://github.com/commercialhaskell/stack/issues/584)
+* `--work-dir` option for overriding `.stack-work`
+  [#1178](https://github.com/commercialhaskell/stack/issues/1178)
+* Support `detailed-0.9` tests
+  [#1429](https://github.com/commercialhaskell/stack/issues/1429)
+* Docker: improved POSIX signal proxying to containers
+  [#547](https://github.com/commercialhaskell/stack/issues/547)
 
 Bug fixes:
 
@@ -26,6 +70,14 @@ Bug fixes:
   [#911](https://github.com/commercialhaskell/stack/issues/911)
   [#1367](https://github.com/commercialhaskell/stack/issues/1367)
 * Docker: `--resolver` argument didn't effect selected image tag
+* GHCi: Spaces in filepaths caused module loading issues
+  [#1401](https://github.com/commercialhaskell/stack/issues/1401)
+* GHCi: cpp-options in cabal files weren't used
+  [#1419](https://github.com/commercialhaskell/stack/issues/1419)
+* Benchmarks couldn't be run independently of eachother
+  [#1412](https://github.com/commercialhaskell/stack/issues/1412)
+* Send output of building setup to stderr
+  [#1410](https://github.com/commercialhaskell/stack/issues/1410)
 
 ## 0.1.8.0
 

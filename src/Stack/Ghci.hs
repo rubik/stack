@@ -4,6 +4,7 @@
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE CPP #-}
 
 -- | Run a GHCi configured with the user's package(s).
 
@@ -21,6 +22,7 @@ import           Control.Monad.Logger
 import           Control.Monad.RWS.Strict
 import           Control.Monad.State.Strict
 import           Control.Monad.Trans.Resource
+import qualified Data.ByteString.Char8 as S8
 import           Data.Either
 import           Data.Function
 import           Data.List
@@ -50,6 +52,10 @@ import           Stack.Package
 import           Stack.Types
 import           Stack.Types.Internal
 import           System.Directory (getTemporaryDirectory)
+
+#ifndef WINDOWS
+import qualified System.Posix.Files as Posix
+#endif
 
 -- | Command-line options for GHC.
 data GhciOpts = GhciOpts
@@ -106,13 +112,14 @@ ghci GhciOpts{..} = do
         $logWarn
             ("The following GHC options are incompatible with GHCi and have not been passed to it: " <>
              T.unwords (map T.pack (nubOrd omittedOpts)))
+    oiDir <- objectInterfaceDir bconfig
     let modulesToLoad = nubOrd $
             concatMap (map display . S.toList . ghciPkgModules) pkgs
         thingsToLoad =
             maybe [] (return . toFilePath) mainFile <> modulesToLoad
         odir =
-            [ "-odir=" <> toFilePathNoTrailingSep (objectInterfaceDir bconfig)
-            , "-hidir=" <> toFilePathNoTrailingSep (objectInterfaceDir bconfig)]
+            [ "-odir=" <> toFilePathNoTrailingSep oiDir
+            , "-hidir=" <> toFilePathNoTrailingSep oiDir ]
     $logInfo
         ("Configuring GHCi with the following packages: " <>
          T.intercalate ", " (map (packageNameText . ghciPkgName) pkgs))
@@ -125,21 +132,20 @@ ghci GhciOpts{..} = do
                  -- include CWD.
                   "-i" :
                   odir <> pkgopts <> ghciArgs <> extras)
-    case ghciNoLoadModules of
-        True -> execGhci []
-        False -> do
-            tmp <- liftIO getTemporaryDirectory
-            withCanonicalizedTempDirectory
-                tmp
-                "ghci-script"
-                (\tmpDir ->
-                      do let scriptPath = tmpDir </> $(mkRelFile "ghci-script")
-                             fp = toFilePath scriptPath
-                             loadModules = ":load " <> unwords (map show thingsToLoad)
-                             bringIntoScope = ":module + " <> unwords modulesToLoad
-                         liftIO (writeFile fp (unlines [loadModules,bringIntoScope]))
-                         finally (execGhci ["-ghci-script=" <> fp])
-                                 (removeFile scriptPath))
+    tmp <- liftIO getTemporaryDirectory
+    withCanonicalizedTempDirectory tmp "ghci" $ \tmpDir -> do
+        let macrosFile = tmpDir </> $(mkRelFile "cabal_macros.h")
+        macrosOpts <- preprocessCabalMacros pkgs macrosFile
+        if ghciNoLoadModules
+            then execGhci macrosOpts
+            else do
+                let scriptPath = tmpDir </> $(mkRelFile "ghci-script")
+                    fp = toFilePath scriptPath
+                    loadModules = ":load " <> unwords (map show thingsToLoad)
+                    bringIntoScope = ":module + " <> unwords modulesToLoad
+                liftIO (writeFile fp (unlines [loadModules,bringIntoScope]))
+                setScriptPerms fp
+                execGhci (macrosOpts ++ ["-ghci-script=" <> fp])
 
 -- | Figure out the main-is file to load based on the targets. Sometimes there
 -- is none, sometimes it's unambiguous, sometimes it's
@@ -322,7 +328,7 @@ wantedPackageComponents _ (STLocalComps cs) _ = cs
 wantedPackageComponents bopts STLocalAll pkg = S.fromList $
     (if packageHasLibrary pkg then [CLib] else []) ++
     map CExe (S.toList (packageExes pkg)) <>
-    (if boptsTests bopts then map CTest (S.toList (packageTests pkg)) else []) <>
+    (if boptsTests bopts then map CTest (M.keys (packageTests pkg)) else []) <>
     (if boptsBenchmarks bopts then map CBench (S.toList (packageBenchmarks pkg)) else [])
 wantedPackageComponents _ _ _ = S.empty
 
@@ -402,9 +408,9 @@ borderedWarning f = do
 -- if they don't have a library (but that's fine for the usage within
 -- this module).
 getIntermediateDeps
-      :: SourceMap
-      -> [(PackageName, (Path Abs File, SimpleTarget))]
-      -> [(PackageName, (Path Abs File, SimpleTarget))]
+    :: SourceMap
+    -> [(PackageName, (Path Abs File, SimpleTarget))]
+    -> [(PackageName, (Path Abs File, SimpleTarget))]
 getIntermediateDeps sourceMap targets =
     M.toList $
     (\mp -> foldl' (flip M.delete) mp (map fst targets)) $
@@ -435,3 +441,24 @@ getIntermediateDeps sourceMap targets =
                         return False
             (_, Just PSUpstream{}) -> return False
             (Nothing, Nothing) -> return False
+
+preprocessCabalMacros :: MonadIO m => [GhciPkgInfo] -> Path Abs File -> m [String]
+preprocessCabalMacros pkgs out = liftIO $ do
+    let fps = nubOrd (concatMap (mapMaybe (bioCabalMacros . snd) . ghciPkgOpts) pkgs)
+    files <- mapM (S8.readFile . toFilePath) fps
+    if null files then return [] else do
+        S8.writeFile (toFilePath out) $ S8.intercalate "\n#undef CURRENT_PACKAGE_KEY\n" files
+        return ["-optP-include", "-optP" <> toFilePath out]
+
+setScriptPerms :: MonadIO m => FilePath -> m ()
+setScriptPerms fp = do
+#ifdef WINDOWS
+    return ()
+#else
+    liftIO $ Posix.setFileMode fp $ foldl1 Posix.unionFileModes
+        [ Posix.ownerReadMode
+        , Posix.ownerWriteMode
+        , Posix.groupReadMode
+        , Posix.otherReadMode
+        ]
+#endif

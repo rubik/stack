@@ -102,9 +102,9 @@ module Stack.Types.Config
   ,packageDatabaseExtra
   ,packageDatabaseLocal
   ,platformOnlyRelDir
-  ,platformVariantRelDir
+  ,platformGhcRelDir
   ,useShaPathOnWindows
-  ,workDirRel
+  ,getWorkDir
   -- * Command-specific types
   -- ** Eval
   ,EvalOpts(..)
@@ -161,6 +161,7 @@ import qualified Paths_stack as Meta
 import           Stack.Types.BuildPlan (SnapName, renderSnapName, parseSnapName)
 import           Stack.Types.Compiler
 import           Stack.Types.Docker
+import           Stack.Types.Nix
 import           Stack.Types.FlagName
 import           Stack.Types.Image
 import           Stack.Types.PackageIdentifier
@@ -178,10 +179,14 @@ import qualified Data.ByteString.Base16 as B16
 data Config =
   Config {configStackRoot           :: !(Path Abs Dir)
          -- ^ ~/.stack more often than not
+         ,configWorkDir             :: !(Path Rel Dir)
+         -- ^ this allows to override .stack-work directory
          ,configUserConfigPath      :: !(Path Abs File)
          -- ^ Path to user configuration file (usually ~/.stack/config.yaml)
          ,configDocker              :: !DockerOpts
          -- ^ Docker configuration
+         ,configNix                 :: !NixOpts
+         -- ^ Execution environment (e.g nix-shell) configuration
          ,configEnvOverride         :: !(EnvSettings -> IO EnvOverride)
          -- ^ Environment variables to be passed to external tools
          ,configLocalProgramsBase   :: !(Path Abs Dir)
@@ -471,8 +476,10 @@ bcRoot :: BuildConfig -> Path Abs Dir
 bcRoot = parent . bcStackYaml
 
 -- | @"'bcRoot'/.stack-work"@
-bcWorkDir :: BuildConfig -> Path Abs Dir
-bcWorkDir = (</> workDirRel) . bcRoot
+bcWorkDir :: (MonadReader env m, HasConfig env) => BuildConfig -> m (Path Abs Dir)
+bcWorkDir bconfig = do
+  workDir <- getWorkDir
+  return (bcRoot bconfig </> workDir)
 
 -- | Configuration after the environment has been setup.
 data EnvConfig = EnvConfig
@@ -720,8 +727,12 @@ instance HasBuildConfig BuildConfig where
 -- Configurations may be "cascaded" using mappend (left-biased).
 data ConfigMonoid =
   ConfigMonoid
-    { configMonoidDockerOpts         :: !DockerOptsMonoid
+    { configMonoidWorkDir            :: !(Maybe FilePath)
+    -- ^ See: 'configWorkDir'.
+    , configMonoidDockerOpts         :: !DockerOptsMonoid
     -- ^ Docker options.
+    , configMonoidNixOpts            :: !NixOptsMonoid
+    -- ^ Options for the execution environment (nix-shell or container)
     , configMonoidConnectionCount    :: !(Maybe Int)
     -- ^ See: 'configConnectionCount'
     , configMonoidHideTHLoading      :: !(Maybe Bool)
@@ -787,7 +798,9 @@ data ConfigMonoid =
 
 instance Monoid ConfigMonoid where
   mempty = ConfigMonoid
-    { configMonoidDockerOpts = mempty
+    { configMonoidWorkDir = Nothing
+    , configMonoidDockerOpts = mempty
+    , configMonoidNixOpts = mempty
     , configMonoidConnectionCount = Nothing
     , configMonoidHideTHLoading = Nothing
     , configMonoidLatestSnapshotUrl = Nothing
@@ -820,7 +833,9 @@ instance Monoid ConfigMonoid where
     , configMonoidAllowNewer = Nothing
     }
   mappend l r = ConfigMonoid
-    { configMonoidDockerOpts = configMonoidDockerOpts l <> configMonoidDockerOpts r
+    { configMonoidWorkDir = configMonoidWorkDir l <|> configMonoidWorkDir r
+    , configMonoidDockerOpts = configMonoidDockerOpts l <> configMonoidDockerOpts r
+    , configMonoidNixOpts = configMonoidNixOpts l <> configMonoidNixOpts r
     , configMonoidConnectionCount = configMonoidConnectionCount l <|> configMonoidConnectionCount r
     , configMonoidHideTHLoading = configMonoidHideTHLoading l <|> configMonoidHideTHLoading r
     , configMonoidLatestSnapshotUrl = configMonoidLatestSnapshotUrl l <|> configMonoidLatestSnapshotUrl r
@@ -862,7 +877,9 @@ instance FromJSON (ConfigMonoid, [JSONWarning]) where
 -- warnings for missing fields.
 parseConfigMonoidJSON :: Object -> WarningParser ConfigMonoid
 parseConfigMonoidJSON obj = do
+    configMonoidWorkDir <- obj ..:? configMonoidWorkDirName
     configMonoidDockerOpts <- jsonSubWarnings (obj ..:? configMonoidDockerOptsName ..!= mempty)
+    configMonoidNixOpts <- jsonSubWarnings (obj ..:? configMonoidNixOptsName ..!= mempty)
     configMonoidConnectionCount <- obj ..:? configMonoidConnectionCountName
     configMonoidHideTHLoading <- obj ..:? configMonoidHideTHLoadingName
     configMonoidLatestSnapshotUrl <- obj ..:? configMonoidLatestSnapshotUrlName
@@ -939,8 +956,14 @@ parseConfigMonoidJSON obj = do
                         Right x -> return $ Just x
         return (name, b)
 
+configMonoidWorkDirName :: Text
+configMonoidWorkDirName = "work-dir"
+
 configMonoidDockerOptsName :: Text
 configMonoidDockerOptsName = "docker"
+
+configMonoidNixOptsName :: Text
+configMonoidNixOptsName = "nix"
 
 configMonoidConnectionCountName :: Text
 configMonoidConnectionCountName = "connection-count"
@@ -1137,14 +1160,15 @@ configPackageTarball iname ident = do
     return (root </> $(mkRelDir "packages") </> name </> ver </> base)
 
 -- | @".stack-work"@
-workDirRel :: Path Rel Dir
-workDirRel = $(mkRelDir ".stack-work")
+getWorkDir :: (MonadReader env m, HasConfig env) => m (Path Rel Dir)
+getWorkDir = configWorkDir `liftM` asks getConfig
 
 -- | Per-project work dir
 configProjectWorkDir :: (HasBuildConfig env, MonadReader env m) => m (Path Abs Dir)
 configProjectWorkDir = do
-    bc <- asks getBuildConfig
-    return (bcRoot bc </> workDirRel)
+    bc      <- asks getBuildConfig
+    workDir <- getWorkDir
+    return (bcRoot bc </> workDir)
 
 -- | File containing the installed cache, see "Stack.PackageDump"
 configInstalledCache :: (HasBuildConfig env, MonadReader env m) => m (Path Abs File)
@@ -1163,7 +1187,7 @@ platformOnlyRelDir = do
 snapshotsDir :: (MonadReader env m, HasConfig env, HasGHCVariant env, MonadThrow m) => m (Path Abs Dir)
 snapshotsDir = do
     config <- asks getConfig
-    platform <- platformVariantRelDir
+    platform <- platformGhcRelDir
     return $ configStackRoot config </> $(mkRelDir "snapshots") </> platform
 
 -- | Installation root for dependencies
@@ -1188,16 +1212,16 @@ platformSnapAndCompilerRel
     => m (Path Rel Dir)
 platformSnapAndCompilerRel = do
     bc <- asks getBuildConfig
-    platform <- platformVariantRelDir
+    platform <- platformGhcRelDir
     name <- parseRelDir $ T.unpack $ resolverName $ bcResolver bc
     ghc <- compilerVersionDir
     useShaPathOnWindows (platform </> name </> ghc)
 
 -- | Relative directory for the platform identifier
-platformVariantRelDir
+platformGhcRelDir
     :: (MonadReader env m, HasPlatform env, HasGHCVariant env, MonadThrow m)
     => m (Path Rel Dir)
-platformVariantRelDir = do
+platformGhcRelDir = do
     platform <- asks getPlatform
     platformVariant <- asks getPlatformVariant
     ghcVariant <- asks getGHCVariant
@@ -1254,7 +1278,7 @@ configMiniBuildPlanCache :: (MonadThrow m, MonadReader env m, HasConfig env, Has
                          -> m (Path Abs File)
 configMiniBuildPlanCache name = do
     root <- asks getStackRoot
-    platform <- platformVariantRelDir
+    platform <- platformGhcRelDir
     file <- parseRelFile $ T.unpack (renderSnapName name) ++ ".cache"
     -- Yes, cached plans differ based on platform
     return (root </> $(mkRelDir "build-plan-cache") </> platform </> file)

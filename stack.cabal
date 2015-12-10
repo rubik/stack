@@ -1,5 +1,5 @@
 name:                stack
-version:             0.1.9.0
+version:             0.1.11.0
 synopsis:            The Haskell Tool Stack
 description:         Please see the README.md for usage information, and
                      the wiki on Github for more details.  Also, note that
@@ -51,6 +51,7 @@ library
                      Stack.Clean
                      Stack.Config
                      Stack.Config.Docker
+                     Stack.Config.Nix
                      Stack.ConfigCmd
                      Stack.Constants
                      Stack.Coverage
@@ -63,6 +64,7 @@ library
                      Stack.GhcPkg
                      Stack.Init
                      Stack.New
+                     Stack.Nix
                      Stack.Options
                      Stack.Package
                      Stack.PackageDump
@@ -83,6 +85,7 @@ library
                      Stack.Types.FlagName
                      Stack.Types.GhcPkgId
                      Stack.Types.Image
+                     Stack.Types.Nix
                      Stack.Types.PackageIdentifier
                      Stack.Types.PackageIndex
                      Stack.Types.PackageName
@@ -171,7 +174,7 @@ library
                    , persistent >= 2.1.2
                    , persistent-sqlite >= 2.1.4
                    , persistent-template >= 2.1.1
-                   , pretty
+                   , pretty >= 1.1.1.1
                    , process >= 1.2.0.0
                    , resourcet >= 1.1.4.1
                    , retry >= 0.6 && < 0.8
@@ -217,7 +220,7 @@ executable stack
   build-depends:  base >=4.7 && < 5
                 , bytestring >= 0.10.4.0
                 , Cabal
-                , containers
+                , containers >= 0.5.5.1
                 , exceptions
                 , filepath
                 , filelock >= 0.1.0.1
@@ -262,11 +265,13 @@ test-suite stack-test
                 , Stack.DotSpec
                 , Stack.PackageDumpSpec
                 , Stack.ArgsSpec
+                , Stack.NixSpec
                 , Network.HTTP.Download.VerifiedSpec
   ghc-options:    -Wall -threaded
   build-depends:  base >=4.7 && <5
                 , hspec <2.3
-                , containers
+                , attoparsec
+                , containers >= 0.5.5.1
                 , directory
                 , exceptions
                 , filepath
@@ -305,7 +310,7 @@ test-suite stack-integration-test
                 , directory
                 , text
                 , unix-compat
-                , containers
+                , containers >= 0.5.5.1
                 , conduit
                 , conduit-extra
                 , resourcet

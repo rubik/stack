@@ -63,6 +63,7 @@ import           Stack.Coverage
 import qualified Stack.Docker as Docker
 import           Stack.Dot
 import           Stack.Exec
+import qualified Stack.Nix as Nix
 import           Stack.Fetch
 import           Stack.FileWatch
 import           Stack.GhcPkg (getGlobalDB, mkGhcPackagePath)
@@ -120,6 +121,10 @@ main = withInterpreterArgs stackProgName $ \args isInterpreter -> do
                    dockerHelpOptName
                    (dockerOptsParser False)
                    ("Only showing --" ++ Docker.dockerCmdName ++ "* options.")
+     execExtraHelp args
+                   nixHelpOptName
+                   (nixOptsParser False)
+                   ("Only showing --" ++ Nix.nixCmdName ++ "* options.")
 #ifdef USE_GIT_INFO
      let commitCount = $gitCommitCount
          versionString' = concat $ concat
@@ -136,7 +141,10 @@ main = withInterpreterArgs stackProgName $ \args isInterpreter -> do
 
      let globalOpts hide =
              extraHelpOption hide progName (Docker.dockerCmdName ++ "*") dockerHelpOptName <*>
-             globalOptsParser hide
+             extraHelpOption hide progName (Nix.nixCmdName ++ "*") nixHelpOptName <*>             
+             globalOptsParser hide (if isInterpreter
+                                    then Just $ LevelOther "silent"
+                                    else Nothing)
          addCommand' cmd title footerStr constr =
              addCommand cmd title footerStr constr (globalOpts True)
          addSubCommands' cmd title footerStr =
@@ -414,16 +422,16 @@ main = withInterpreterArgs stackProgName $ \args isInterpreter -> do
                Sig.sigCmdName
                "Subcommands specific to package signatures (EXPERIMENTAL)"
                cmdFooter
-               (do addSubCommands'
-                     Sig.sigSignCmdName
-                     "Sign a a single package or all your packages"
+               (addSubCommands'
+                  Sig.sigSignCmdName
+                  "Sign a a single package or all your packages"
+                  cmdFooter
+                  (addCommand'
+                     Sig.sigSignSdistCmdName
+                     "Sign a single sdist package file"
                      cmdFooter
-                     (do addCommand'
-                           Sig.sigSignSdistCmdName
-                           "Sign a single sdist package file"
-                           cmdFooter
-                           sigSignSdistCmd
-                           Sig.sigSignSdistOpts)))
+                     sigSignSdistCmd
+                     Sig.sigSignSdistOpts)))
      case eGlobalRun of
        Left (exitCode :: ExitCode) -> do
          when isInterpreter $
@@ -454,6 +462,7 @@ main = withInterpreterArgs stackProgName $ \args isInterpreter -> do
   where
     ignoreCheckSwitch = switch (long "ignore-check" <> help "Do not check package for common mistakes")
     dockerHelpOptName = Docker.dockerCmdName ++ "-help"
+    nixHelpOptName    = Nix.nixCmdName ++ "-help"
     cmdFooter = "Run 'stack --help' for global options that apply to all subcommands."
 
 -- | Print out useful path information in a human-readable format (and
@@ -631,11 +640,13 @@ setupCmd :: SetupCmdOpts -> GlobalOpts -> IO ()
 setupCmd SetupCmdOpts{..} go@GlobalOpts{..} = do
   (manager,lc) <- loadConfigWithOpts go
   withUserFileLock go (configStackRoot $ lcConfig lc) $ \lk ->
-   runStackTGlobal manager (lcConfig lc) go $
+    runStackTGlobal manager (lcConfig lc) go $
       Docker.reexecWithOptionalContainer
           (lcProjectRoot lc)
           Nothing
-          (runStackLoggingTGlobal manager go $ do
+          (runStackTGlobal manager (lcConfig lc) go $
+           Nix.reexecWithOptionalShell $
+           runStackLoggingTGlobal manager go $ do
               (wantedCompiler, compilerCheck, mstack) <-
                   case scoCompilerVersion of
                       Just v -> return (v, MatchMinor, Nothing)
@@ -796,10 +807,15 @@ withBuildConfigExt go@GlobalOpts{..} mbefore inner mafter = do
                   (inner' lk)
 
       runStackTGlobal manager (lcConfig lc) go $
-         Docker.reexecWithOptionalContainer (lcProjectRoot lc) mbefore (inner'' lk0) mafter
-                                            (Just $ liftIO $
-                                             do lk' <- readIORef curLk
-                                                munlockFile lk')
+        Docker.reexecWithOptionalContainer
+                 (lcProjectRoot lc)
+                 mbefore
+                 (runStackTGlobal manager (lcConfig lc) go $
+                    Nix.reexecWithOptionalShell (inner'' lk0))
+                 mafter
+                 (Just $ liftIO $
+                      do lk' <- readIORef curLk
+                         munlockFile lk')
 
 cleanCmd :: CleanOpts -> GlobalOpts -> IO ()
 cleanCmd opts go = withBuildConfigAndLock go (const (clean opts))
@@ -936,7 +952,9 @@ execCmd ExecOpts {..} go@GlobalOpts{..} =
                     (runStackTGlobal manager (lcConfig lc) go $ do
                         config <- asks getConfig
                         menv <- liftIO $ configEnvOverride config plainEnvSettings
-                        exec menv cmd args)
+                        Nix.reexecWithOptionalShell
+                            (runStackTGlobal manager (lcConfig lc) go $
+                                exec menv cmd args))
                     Nothing
                     Nothing -- Unlocked already above.
         ExecOptsEmbellished {..} ->
@@ -1030,7 +1048,7 @@ dockerResetCmd keepHome go@GlobalOpts{..} = do
     (manager,lc) <- liftIO (loadConfigWithOpts go)
     -- TODO: can we eliminate this lock if it doesn't touch ~/.stack/?
     withUserFileLock go (configStackRoot $ lcConfig lc) $ \_ ->
-     runStackLoggingTGlobal manager go $
+      runStackTGlobal manager (lcConfig lc) go $
         Docker.preventInContainer $ Docker.reset (lcProjectRoot lc) keepHome
 
 -- | Cleanup Docker images and containers.
@@ -1066,7 +1084,7 @@ imgDockerCmd rebuild go@GlobalOpts{..} =
         (Just Image.createContainerImageFromStage)
 
 sigSignSdistCmd :: (String, String) -> GlobalOpts -> IO ()
-sigSignSdistCmd (url,path) go = do
+sigSignSdistCmd (url,path) go =
     withConfigAndLock
         go
         (do (manager,lc) <- liftIO (loadConfigWithOpts go)
