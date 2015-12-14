@@ -141,7 +141,7 @@ readProcessNull wd menv name args =
     sinkProcessStdout wd menv name args CL.sinkNull
 
 -- | Run the given command in the given directory. If it exits with anything
--- but success, prints an error and then calls 'exitWith' to exit the program.
+-- but success, print an error and then call 'exitWith' to exit the program.
 readInNull :: (MonadIO m, MonadLogger m, MonadBaseControl IO m, MonadCatch m)
            => Path Abs Dir -- ^ Directory to run in
            -> FilePath -- ^ Command to run
@@ -152,18 +152,12 @@ readInNull :: (MonadIO m, MonadLogger m, MonadBaseControl IO m, MonadCatch m)
 readInNull wd cmd menv args errMsg = do
     result <- try (readProcessNull (Just wd) menv cmd args)
     case result of
-        Left (ProcessExitedUnsuccessfully _ ec) -> do
-            $logError $
-                T.pack $
-                concat
-                    [ "Exit code "
-                    , show ec
-                    , " while running "
-                    , show (cmd : args)
-                    , " in "
-                    , toFilePath wd]
-            forM_ errMsg $logError
-            liftIO (exitWith ec)
+        Left ex -> do
+            $logError (T.pack (show ex))
+            case ex of
+                ReadProcessException{} -> forM_ errMsg $logError
+                _ -> return ()
+            liftIO exitFailure
         Right () -> return ()
 
 -- | Try to produce a strict 'S.ByteString' from the stdout of a
@@ -342,7 +336,7 @@ findExecutable eo name = liftIO $ do
                                 else testFPs fps
                     testFPs fps0
             epath <- loop $ eoPath eo
-            !() <- atomicModifyIORef (eoExeCache eo) $ \m' ->
+            () <- atomicModifyIORef (eoExeCache eo) $ \m' ->
                 (Map.insert name epath m', ())
             return epath
     return $ either throwM return epath
