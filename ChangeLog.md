@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased changes
+
+Release notes:
+
+
+Major changes:
+
+
+Other enhancements:
+
+
+Bug fixes:
+
+
+## 0.1.10.1
+
+Bug fixes:
+
+* `stack image container` did not actually build an image
+  [#1473](https://github.com/commercialhaskell/stack/issues/1473)
+
 ## 0.1.10.0
 
 Release notes:
@@ -23,17 +44,6 @@ Release notes:
   packages are now available, thanks to [@mimi1vx](https://github.com/mimi1vx).
   Note: there will be some lag before these pick up new versions, as they are
   based on Stackage LTS.
-
-Major changes:
-
-
-Other enhancements:
-
-
-Bug fixes:
-
-
-## 0.1.10.0
 
 Major changes:
 
